@@ -1,0 +1,412 @@
+{
+  "info": {
+    "name": "APL Travel Backend — Flight & Hotel Booking",
+    "description": "Dummy OTA flow inspired by MakeMyTrip/Paytm: Search → Details → Revalidate → Checkout (token) → Book → Get booking.\n\nBase URL: http://localhost:3000\nNo real payment gateway. Cards ending in 0000 fail.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "flightSearchId", "value": "" },
+    { "key": "flightId", "value": "" },
+    { "key": "flightFareId", "value": "" },
+    { "key": "flightCheckoutToken", "value": "" },
+    { "key": "flightBookingRef", "value": "" },
+    { "key": "hotelSearchId", "value": "" },
+    { "key": "hotelId", "value": "" },
+    { "key": "hotelRoomId", "value": "" },
+    { "key": "hotelCheckoutToken", "value": "" },
+    { "key": "hotelBookingRef", "value": "" },
+    { "key": "loginToken", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "item": [
+        {
+          "name": "GET Health",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "0.1 Auth",
+      "item": [
+        {
+          "name": "POST Signup",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Rohan Dalal\",\n  \"email\": \"rohan.traveller@example.com\",\n  \"phoneNumber\": \"9876543210\",\n  \"password\": \"Travel@123\",\n  \"profilePhoto\": \"https://example.com/photos/rohan.jpg\",\n  \"currency\": \"INR\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/auth/signup"
+          }
+        },
+        {
+          "name": "POST Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.loginToken) {",
+                  "  pm.collectionVariables.set('loginToken', j.data.loginToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"rohan.traveller@example.com\",\n  \"password\": \"Travel@123\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "description": "Returns loginToken. Send Authorization: Bearer {{loginToken}} on book, lists, details, cancel, and account APIs."
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Flight booking flow",
+      "item": [
+        {
+          "name": "1.0 POST Airports Search (Delhi)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"Delhi\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/flights/airports/search",
+            "description": "Returns metro cityCode DEL and airports IGI (DEL), Hindon (HDO), Noida International (DXN). Use cityCode in flight search."
+          }
+        },
+        {
+          "name": "1.1 POST Flights Search (DEL city → BOM city)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.test('search ok', () => pm.expect(j.success).to.eql(true));",
+                  "if (j.data && j.data.searchId) {",
+                  "  pm.collectionVariables.set('flightSearchId', j.data.searchId);",
+                  "  const f = j.data.flights[0];",
+                  "  pm.collectionVariables.set('flightId', f.aplFlightId);",
+                  "  pm.collectionVariables.set('flightFareId', f.flightFareData[0].aplFareId);",
+                  "  console.log('airports searched', j.data.route.originAirports, 'flights', j.data.flights.length);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tripType\": \"ONEWAY\",\n  \"originCityCode\": \"DEL\",\n  \"destinationCityCode\": \"BOM\",\n  \"departDate\": \"2026-10-15\",\n  \"adults\": 1,\n  \"children\": 0,\n  \"infants\": 0,\n  \"cabinClass\": \"ECONOMY\",\n  \"currency\": \"INR\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/flights/search",
+            "description": "City codes expand to all metro airports (DEL→DEL,HDO,DXN). Returns flights from IGI, Hindon and Noida International to Mumbai."
+          }
+        },
+        {
+          "name": "1.2 POST Flights Details",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"searchId\": \"{{flightSearchId}}\",\n  \"aplFlightId\": \"{{flightId}}\",\n  \"aplFareId\": \"{{flightFareId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/flights/details",
+            "description": "Pass searchId + aplFlightId (required). Optional aplFareId selects selectedFlightFareData; without it lowest fare is selected."
+          }
+        },
+        {
+          "name": "1.3 POST Flights Revalidate",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.price) {",
+                  "  pm.collectionVariables.set('flightConfirmPrice', String(j.data.price.amount + 450 + 350));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"searchId\": \"{{flightSearchId}}\",\n  \"aplFlightId\": \"{{flightId}}\",\n  \"aplFareId\": \"{{flightFareId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/flights/revalidate"
+          }
+        },
+        {
+          "name": "1.4 POST Flights Checkout (travellers → token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.checkoutToken) {",
+                  "  pm.collectionVariables.set('flightCheckoutToken', j.data.checkoutToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"searchId\": \"{{flightSearchId}}\",\n  \"aplFlightId\": \"{{flightId}}\",\n  \"aplFareId\": \"{{flightFareId}}\",\n  \"contact\": {\n    \"email\": \"rohan.traveller@example.com\",\n    \"phone\": \"9876543210\",\n    \"countryCode\": \"+91\"\n  },\n  \"travellers\": [\n    {\n      \"type\": \"ADULT\",\n      \"title\": \"Mr\",\n      \"firstName\": \"Rohan\",\n      \"lastName\": \"Dalal\",\n      \"dateOfBirth\": \"1995-05-12\",\n      \"gender\": \"M\",\n      \"nationality\": \"IN\"\n    }\n  ],\n  \"addOns\": {\n    \"seats\": [\"12A\"],\n    \"baggage\": [],\n    \"meals\": [\"VGML\"]\n  },\n  \"confirmPrice\": {\n    \"amount\": {{flightConfirmPrice}},\n    \"currency\": \"INR\"\n  }\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/flights/checkout",
+            "description": "Requires searchId + aplFlightId + aplFareId. Returns checkoutToken."
+          }
+        },
+        {
+          "name": "1.5 POST Flights Book (mock CARD)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.aplBookingRef) {",
+                  "  pm.collectionVariables.set('flightBookingRef', j.data.aplBookingRef);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"checkoutToken\": \"{{flightCheckoutToken}}\",\n  \"confirmPrice\": {\n    \"amount\": {{flightConfirmPrice}},\n    \"currency\": \"INR\"\n  },\n  \"payment\": {\n    \"method\": \"CARD\",\n    \"cardNumber\": \"4111111111111111\"\n  }\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/flights/book",
+            "description": "Dummy payment. Card ending 0000 is declined. Or use UPI: {\"method\":\"UPI\",\"upiId\":\"rohan@okaxis\"}"
+          }
+        },
+        {
+          "name": "1.6 GET Booking by ref",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/bookings/{{flightBookingRef}}"
+          }
+        },
+        {
+          "name": "1.7 GET Flight booking list",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/flights/bookings"
+          }
+        },
+        {
+          "name": "1.8 POST Flight booking details",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bookingId\": \"{{flightBookingRef}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/flights/bookings/details"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Hotel booking flow",
+      "item": [
+        {
+          "name": "2.0 POST Hotel Cities Search (Delhi)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"Delhi\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/hotels/cities/search",
+            "description": "Returns numeric cityCode 130443 for New Delhi. Use that cityCode in hotel search."
+          }
+        },
+        {
+          "name": "2.1 POST Hotels Search (cityCode 130443)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.searchId) {",
+                  "  pm.collectionVariables.set('hotelSearchId', j.data.searchId);",
+                  "  const h = j.data.hotels.find(x => (x.availableRooms||[]).length > 1) || j.data.hotels[0];",
+                  "  pm.collectionVariables.set('hotelId', h.aplHotelId);",
+                  "  pm.collectionVariables.set('hotelRoomId', h.availableRooms[0].aplRoomId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cityCode\": \"130443\",\n  \"checkIn\": \"2026-10-20\",\n  \"checkOut\": \"2026-10-22\",\n  \"rooms\": 1,\n  \"adults\": 2,\n  \"children\": 2,\n  \"childAges\": [\"5\", \"8\"],\n  \"currency\": \"INR\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/hotels/search"
+          }
+        },
+        {
+          "name": "2.2 POST Hotels Details (available rooms)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"searchId\": \"{{hotelSearchId}}\",\n  \"aplHotelId\": \"{{hotelId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/hotels/details",
+            "description": "Returns availableRooms. Pick one aplRoomId for checkout."
+          }
+        },
+        {
+          "name": "2.3 POST Hotels Revalidate selected room",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.price) {",
+                  "  pm.collectionVariables.set('hotelConfirmPrice', String(j.data.price.amount + 800));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.price) {",
+                  "  pm.collectionVariables.set('hotelConfirmPrice', String(j.data.price.amount + 800));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"searchId\": \"{{hotelSearchId}}\",\n  \"aplHotelId\": \"{{hotelId}}\",\n  \"aplRoomId\": \"{{hotelRoomId}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/hotels/revalidate",
+            "description": "Saves hotelConfirmPrice as room price + BREAKFAST (800)."
+          }
+        },
+        {
+          "name": "2.4 POST Hotels Checkout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.checkoutToken) {",
+                  "  pm.collectionVariables.set('hotelCheckoutToken', j.data.checkoutToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"searchId\": \"{{hotelSearchId}}\",\n  \"aplHotelId\": \"{{hotelId}}\",\n  \"aplRoomId\": \"{{hotelRoomId}}\",\n  \"addOns\": {\n    \"extraServices\": [\"BREAKFAST\"]\n  },\n  \"confirmPrice\": {\n    \"amount\": {{hotelConfirmPrice}},\n    \"currency\": \"INR\"\n  },\n  \"contact\": {\n    \"email\": \"rohan.traveller@example.com\",\n    \"phone\": \"9876543210\",\n    \"countryCode\": \"+91\"\n  },\n  \"guests\": [\n    {\n      \"type\": \"ADULT\",\n      \"title\": \"Mr\",\n      \"firstName\": \"Rohan\",\n      \"lastName\": \"Dalal\"\n    },\n    {\n      \"type\": \"ADULT\",\n      \"title\": \"Ms\",\n      \"firstName\": \"Priya\",\n      \"lastName\": \"Sharma\"\n    }\n  ]\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/hotels/checkout",
+            "description": "confirmPrice must equal room price + selected extraServices. BREAKFAST is 800."
+          }
+        },
+        {
+          "name": "2.5 POST Hotels Book (mock payment)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.data && j.data.aplBookingRef) {",
+                  "  pm.collectionVariables.set('hotelBookingRef', j.data.aplBookingRef);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"checkoutToken\": \"{{hotelCheckoutToken}}\",\n  \"confirmPrice\": {\n    \"amount\": {{hotelConfirmPrice}},\n    \"currency\": \"INR\"\n  },\n  \"payment\": {\n    \"method\": \"UPI\",\n    \"upiId\": \"rohan@okaxis\"\n  }\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/hotels/book",
+            "description": "confirmPrice must match the amount locked at checkout."
+          }
+        },
+        {
+          "name": "2.6 GET Hotel booking list",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/hotels/bookings"
+          }
+        },
+        {
+          "name": "2.7 POST Hotel booking details",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bookingId\": \"{{hotelBookingRef}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/hotels/bookings/details"
+          }
+        }
+      ]
+    }
+  ]
+}

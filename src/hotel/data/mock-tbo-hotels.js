@@ -1,0 +1,86 @@
+'use strict';
+
+/**
+ * Deterministic mock TBO hotel inventory (Delhi slice).
+ * Adapters apply search criteria (dates/currency) when returning candidates.
+ */
+function getMockTboHotels(criteria) {
+  const currency = criteria.currency || 'INR';
+  return [
+    {
+      supplier: 'TBO',
+      supplierHotelId: '123456',
+      supplierOfferId: 'TBO-OFF-9001',
+      supplierReference: 'TBO-REF-NDA-01',
+      name: 'Novotel New Delhi Aerocity',
+      addressLine1: 'Asset 2, Aerocity',
+      city: 'New Delhi',
+      country: 'India',
+      countryIso2: 'IN',
+      postalCode: '110037',
+      latitude: 28.5503,
+      longitude: 77.1225,
+      phone: '+91-11-41212121',
+      starRating: 5,
+      roomName: 'Deluxe King',
+      mealPlan: 'Breakfast',
+      refundable: true,
+      supplierPrice: { amount: 8900, currency },
+      checkIn: criteria.checkIn,
+      checkOut: criteria.checkOut,
+      occupancy: { maxAdults: 2, maxChildren: 1 },
+      bedType: 'King',
+      raw: { mock: true, source: 'tbo', hotelCode: '123456' },
+    },
+    {
+      supplier: 'TBO',
+      supplierHotelId: '123456',
+      supplierOfferId: 'TBO-OFF-9002',
+      supplierReference: 'TBO-REF-NDA-02',
+      name: 'Novotel New Delhi Aerocity',
+      addressLine1: 'Asset 2, Aerocity',
+      city: 'New Delhi',
+      country: 'India',
+      countryIso2: 'IN',
+      postalCode: '110037',
+      latitude: 28.5503,
+      longitude: 77.1225,
+      phone: '+91-11-41212121',
+      starRating: 5,
+      roomName: 'Club Room',
+      mealPlan: 'Breakfast',
+      refundable: true,
+      supplierPrice: { amount: 11200, currency },
+      checkIn: criteria.checkIn,
+      checkOut: criteria.checkOut,
+      occupancy: { maxAdults: 2, maxChildren: 1 },
+      bedType: 'King',
+      raw: { mock: true, source: 'tbo', hotelCode: '123456', room: 'CLUB' },
+    },
+    {
+      supplier: 'TBO',
+      supplierHotelId: '778899',
+      supplierOfferId: 'TBO-OFF-9102',
+      supplierReference: 'TBO-REF-CP-02',
+      name: 'Hotel Novotel Delhi Connaught Place',
+      addressLine1: 'Barakhamba Road, Connaught Place',
+      city: 'New Delhi',
+      country: 'India',
+      countryIso2: 'IN',
+      postalCode: '110001',
+      latitude: 28.6315,
+      longitude: 77.2167,
+      phone: '+91-11-40000000',
+      starRating: 4,
+      roomName: 'Superior Twin',
+      mealPlan: 'Room Only',
+      refundable: false,
+      supplierPrice: { amount: 7200, currency },
+      checkIn: criteria.checkIn,
+      checkOut: criteria.checkOut,
+      raw: { mock: true, source: 'tbo', hotelCode: '778899' },
+    },
+  ];
+}
+
+module.exports = { getMockTboHotels };
