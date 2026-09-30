@@ -21,7 +21,7 @@ function quoteFlightPrice(dto, fare) {
   const seats = sumSelected(catalog.seats, dto.addOns?.seats || [], 'seat');
   const baggage = sumSelected(catalog.baggage, dto.addOns?.baggage || [], 'baggage');
   const meals = sumSelected(catalog.meals, dto.addOns?.meals || [], 'meal');
-  const payableTravellers = dto.travellers.filter((t) => t.type !== 'INFANT').length;
+  const payableTravellers = Math.max(1, dto.travellers.length);
   const baseAmount = fare.price.amount * payableTravellers;
   const addonsAmount = seats.amount + baggage.amount + meals.amount;
   const selectedAddOns = [...seats.selected, ...baggage.selected, ...meals.selected];

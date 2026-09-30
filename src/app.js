@@ -19,6 +19,8 @@ const flightsRoutes = require('./flight/routes/flights.routes');
 const bookingsRoutes = require('./booking/routes/bookings.routes');
 const authRoutes = require('./user/routes/auth.routes');
 const accountRoutes = require('./user/routes/account.routes');
+const travellersRoutes = require('./user/routes/travellers.routes');
+const { sendSuccess } = require('./common/response/envelope');
 
 function createApp() {
   const app = express();
@@ -54,12 +56,32 @@ function createApp() {
     }),
   );
 
+  app.get('/', (req, res) => {
+    const acceptsHtml = String(req.headers.accept || '').includes('text/html');
+    if (acceptsHtml) {
+      res.status(200).type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>APL Travel API</title>
+</head>
+<body style="font-family: Georgia, serif; background: #f4f8fb; color: #0c1b24; padding: 3rem;">
+  <h1>APL Travel API is running</h1>
+  <p>This address is the booking service. Open the website at <a href="http://localhost:3001">http://localhost:3001</a>.</p>
+</body>
+</html>`);
+      return;
+    }
+    return sendSuccess(res, { service: 'apl-travel-backend', status: 'up' });
+  });
+
   app.use('/health', healthRoutes);
   app.use(`/${config.apiPrefix}/suppliers`, suppliersRoutes);
   app.use(`/${config.apiPrefix}/hotels`, hotelsRoutes);
   app.use(`/${config.apiPrefix}/flights`, flightsRoutes);
   app.use(`/${config.apiPrefix}/auth`, authRoutes);
   app.use(`/${config.apiPrefix}/account`, accountRoutes);
+  app.use(`/${config.apiPrefix}/travellers`, travellersRoutes);
   app.use(`/${config.apiPrefix}/bookings`, bookingsRoutes);
 
   app.use(notFoundHandler);

@@ -219,6 +219,7 @@ function validateHotelCheckoutBody(body) {
       email: g.email,
       phone: g.phone,
     })),
+    guestCount: Math.max(1, Number(body.guestCount) || body.guests.length || 1),
   };
 }
 

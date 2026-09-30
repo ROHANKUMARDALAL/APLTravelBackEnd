@@ -4,10 +4,26 @@ const express = require('express');
 const { asyncHandler } = require('../../common/middleware/error-handler');
 const { requireLogin } = require('../../common/middleware/require-login');
 const { sendSuccess } = require('../../common/response/envelope');
-const { getBookingByRef, cancelBooking } = require('../../common/services/checkout-booking.service');
+const { getBookingByRef, cancelBooking, listBookingsForCustomer, claimRecordedBooking } = require('../../common/services/checkout-booking.service');
 const { AppError } = require('../../common/errors/app-error');
 
 const router = express.Router();
+
+router.get(
+  '/',
+  requireLogin,
+  asyncHandler(async (req, res) => {
+    return sendSuccess(res, await listBookingsForCustomer(req.user));
+  }),
+);
+
+router.post(
+  '/claim',
+  requireLogin,
+  asyncHandler(async (req, res) => {
+    return sendSuccess(res, await claimRecordedBooking(req.user, req.body || {}));
+  }),
+);
 
 router.post(
   '/cancel',

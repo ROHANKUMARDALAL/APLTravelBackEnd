@@ -68,11 +68,27 @@ const BookingSchema = new mongoose.Schema(
     },
     checkoutToken: { type: String, index: true },
     searchId: { type: String },
+    /** Local confirmation number claimed onto this customer, so a reload does not duplicate it. */
+    clientReference: { type: String, sparse: true, unique: true },
+    /** UTC instant used only to order bookings, newest first. */
+    bookedAtUtc: { type: Date, index: true },
+    /** IANA zone chosen from the booking currency. */
+    timeZone: { type: String, default: 'Asia/Kolkata' },
+    /** Wall clock stored for reading. INR is IST. Other currencies use that country. */
+    bookedAtLocal: { type: String },
+    /**
+     * Service folders. A hotel booking lives under services.hotel,
+     * a flight under services.flight.
+     */
+    services: { type: mongoose.Schema.Types.Mixed, default: {} },
     items: { type: [BookingItemSchema], default: [] },
     travellers: { type: [TravellerSchema], default: [] },
   },
   { timestamps: true },
 );
+
+BookingSchema.index({ productType: 1, createdAt: -1 });
+BookingSchema.index({ createdAt: -1 });
 
 const PaymentSchema = new mongoose.Schema(
   {

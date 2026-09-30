@@ -22,11 +22,13 @@ function quoteHotelPrice(dto, room) {
     dto.addOns?.extraServices || [],
     'extra service',
   );
+  const guests = Math.max(1, Number(dto.guestCount) || dto.guests?.length || 1);
+  const roomAmount = room.price.amount * guests;
   return {
     currency,
-    baseAmount: room.price.amount,
+    baseAmount: roomAmount,
     addonsAmount: extras.amount,
-    amount: room.price.amount + extras.amount,
+    amount: roomAmount + extras.amount,
     selectedAddOns: extras.selected,
   };
 }

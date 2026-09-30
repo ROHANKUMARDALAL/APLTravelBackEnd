@@ -9,6 +9,7 @@ const {
 } = require('../utils/apl-ids');
 const CheckoutSession = require('../database/models/CheckoutSession');
 const { Booking, Payment } = require('../database/models/Booking');
+const { bookingClock, serviceFolderName } = require('../utils/booking-time');
 const AccountAction = require('../../user/models/AccountAction');
 const User = require('../../user/models/User');
 
@@ -146,6 +147,35 @@ async function confirmBookingFromCheckout({ checkoutToken, payment, confirmPrice
   const supplierCode = session.offerSnapshot?.supplier || 'TBO';
   const supplierBookingRef = `PNR${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
+  const clock = bookingClock(new Date(), session.pricing.currency);
+  const serviceName = serviceFolderName(session.productType);
+  const items = [
+    {
+      productType: session.productType,
+      aplEntityId: session.aplEntityId,
+      aplOfferId: session.aplOfferId,
+      supplierCode,
+      supplierBookingRef,
+      supplierBookingStatus: 'CONFIRMED',
+      amount: session.pricing.amount,
+      currency: session.pricing.currency,
+      snapshot: session.offerSnapshot,
+    },
+  ];
+  const serviceRecord = {
+    aplBookingRef,
+    status: 'CONFIRMED',
+    currency: session.pricing.currency,
+    totalAmount: session.pricing.amount,
+    bookedAtUtc: clock.bookedAtUtc,
+    bookedAtLocal: clock.bookedAtLocal,
+    timeZone: clock.timeZone,
+    guestEmail: session.contact.email,
+    guestPhone: session.contact.phone,
+    travellers: session.travellers,
+    items,
+  };
+
   const booking = await Booking.create({
     aplBookingRef,
     userId: user._id,
@@ -154,24 +184,16 @@ async function confirmBookingFromCheckout({ checkoutToken, payment, confirmPrice
     status: 'CONFIRMED',
     currency: session.pricing.currency,
     totalAmount: session.pricing.amount,
+    bookedAtUtc: clock.bookedAtUtc,
+    timeZone: clock.timeZone,
+    bookedAtLocal: clock.bookedAtLocal,
+    services: { [serviceName]: serviceRecord },
     guestEmail: session.contact.email,
     guestPhone: session.contact.phone,
     checkoutToken,
     searchId: session.searchId,
     travellers: session.travellers,
-    items: [
-      {
-        productType: session.productType,
-        aplEntityId: session.aplEntityId,
-        aplOfferId: session.aplOfferId,
-        supplierCode,
-        supplierBookingRef,
-        supplierBookingStatus: 'CONFIRMED',
-        amount: session.pricing.amount,
-        currency: session.pricing.currency,
-        snapshot: session.offerSnapshot,
-      },
-    ],
+    items,
   });
 
   const paymentDoc = await Payment.create({
@@ -219,6 +241,10 @@ async function confirmBookingFromCheckout({ checkoutToken, payment, confirmPrice
     productType: booking.productType,
     totalAmount: booking.totalAmount,
     currency: booking.currency,
+    bookedAtUtc: booking.bookedAtUtc,
+    bookedAtLocal: booking.bookedAtLocal,
+    timeZone: booking.timeZone,
+    services: booking.services,
     guestEmail: booking.guestEmail,
     guestPhone: booking.guestPhone,
     travellers: booking.travellers,
@@ -254,18 +280,11 @@ async function getBookingByRef(aplBookingRef, userId) {
   const payment = await Payment.findOne({ bookingId: booking._id }).sort({
     createdAt: -1,
   });
+  const card = bookingCard(booking, payment);
   return {
+    ...card,
     aplBookingRef: booking.aplBookingRef,
-    bookingStatus: booking.status,
-    paymentStatus: payment ? payment.status : 'PENDING',
     status: booking.status,
-    productType: booking.productType,
-    totalAmount: booking.totalAmount,
-    currency: booking.currency,
-    guestEmail: booking.guestEmail,
-    guestPhone: booking.guestPhone,
-    travellers: booking.travellers,
-    items: booking.items,
     payment: payment
       ? {
           status: payment.status,
@@ -277,33 +296,76 @@ async function getBookingByRef(aplBookingRef, userId) {
           currency: payment.currency,
         }
       : null,
-    createdAt: booking.createdAt,
   };
 }
 
 function bookingCard(booking, payment) {
   const item = booking.items?.[0];
   const snap = item?.snapshot || {};
+  const flight = snap.flight || {};
+  const service = String(booking.productType || "").toLowerCase();
   let title = booking.productType;
+  const searchQuery = {};
   if (booking.productType === 'FLIGHT') {
-    const dep = snap.flight?.departure?.airport || snap.flight?.departure?.cityCode;
-    const arr = snap.flight?.arrival?.airport || snap.flight?.arrival?.cityCode;
-    title = [snap.flight?.airline, snap.flight?.flightNumber, dep && arr ? `${dep}-${arr}` : null]
+    const dep = flight.departure?.airportInfo?.cityName || flight.departure?.airport;
+    const arr = flight.arrival?.airportInfo?.cityName || flight.arrival?.airport;
+    title = [flight.airline?.name || flight.airline, dep && arr ? `${dep} → ${arr}` : null]
       .filter(Boolean)
-      .join(' ');
+      .join(' · ');
+    searchQuery.from = dep || '';
+    searchQuery.to = arr || '';
+    searchQuery.depart = String(flight.departure?.at || '').slice(0, 10);
   } else if (booking.productType === 'HOTEL') {
     title = [snap.hotel?.name, snap.selectedRoom?.roomName].filter(Boolean).join(' · ');
+    searchQuery.destination = snap.hotel?.name || snap.hotel?.location?.city || '';
+    searchQuery.checkIn = String(snap.selectedRoom?.checkIn || snap.stay?.checkIn || '').slice(0, 10);
+    searchQuery.checkOut = String(snap.selectedRoom?.checkOut || snap.stay?.checkOut || '').slice(0, 10);
   }
+  const status = String(booking.status || '').toUpperCase();
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const bookedDay = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(booking.bookedAtUtc || booking.createdAt || Date.now()));
+  const travelDay = searchQuery.checkOut || searchQuery.depart || '';
+  let tripPhase = 'upcoming';
+  if (status === 'CANCELLED' || status === 'FAILED') tripPhase = 'cancelled';
+  else if ((travelDay && travelDay < today) || (!travelDay && bookedDay < today)) {
+    tripPhase = 'completed';
+  }
+
   return {
     bookingId: booking.aplBookingRef,
+    customerId: booking.customerProfileId || (booking.userId ? String(booking.userId) : null),
     productType: booking.productType,
-    bookingStatus: booking.status,
+    service,
+    aplEntityId: item?.aplEntityId || null,
+    bookingStatus: status.toLowerCase(),
+    tripPhase,
     paymentStatus: payment ? payment.status : 'PENDING',
     totalAmount: booking.totalAmount,
     currency: booking.currency,
     title: title || booking.aplBookingRef,
+    searchQuery,
+    travellers: (booking.travellers || []).map((traveller) => ({
+      type: traveller.type,
+      title: traveller.title,
+      firstName: traveller.firstName,
+      lastName: traveller.lastName,
+    })),
     guestEmail: booking.guestEmail,
+    guestPhone: booking.guestPhone,
     createdAt: booking.createdAt,
+    bookedAtUtc: booking.bookedAtUtc || booking.createdAt,
+    bookedAtLocal: booking.bookedAtLocal,
+    timeZone: booking.timeZone,
   };
 }
 
@@ -317,6 +379,40 @@ async function latestPaymentsFor(bookings) {
     if (!latest.has(key)) latest.set(key, payment);
   }
   return latest;
+}
+
+async function listBookingsForCustomer(user) {
+  const customerId = String(user._id);
+  if (user.email) {
+    await Booking.updateMany(
+      {
+        guestEmail: String(user.email).toLowerCase(),
+        $or: [{ userId: { $exists: false } }, { userId: null }],
+      },
+      { $set: { userId: user._id, customerProfileId: customerId } },
+    );
+  }
+  const bookings = await Booking.find({
+    $or: [{ userId: user._id }, { customerProfileId: customerId }],
+  })
+    .sort({ createdAt: -1 })
+    .limit(100);
+  const payments = await latestPaymentsFor(bookings);
+  const cards = bookings.map((booking) =>
+    bookingCard(booking, payments.get(String(booking._id))),
+  );
+  const services = {};
+  for (const card of cards) {
+    const folder = card.service || 'other';
+    if (!services[folder]) services[folder] = [];
+    services[folder].push(card);
+  }
+  return {
+    customerId,
+    count: cards.length,
+    bookings: cards,
+    services,
+  };
 }
 
 async function listBookingsByProduct(productType, userId) {
@@ -406,21 +502,112 @@ async function cancelBooking({ bookingId, userId, productType }) {
         : 'Refund recorded; wallet currency does not match booking currency',
   });
 
-  return {
-    bookingId: booking.aplBookingRef,
-    productType: booking.productType,
-    bookingStatus: booking.status,
-    paymentStatus: 'REFUNDED',
-    refundedAmount: booking.totalAmount,
-    currency: booking.currency,
-    balance: user ? user.balance : 0,
+  return { bookingId: booking.aplBookingRef, productType: booking.productType, bookingStatus: booking.status, paymentStatus: 'REFUNDED', refundedAmount: booking.totalAmount, currency: booking.currency, balance: user ? user.balance : 0 };
+}
+
+async function claimRecordedBooking(user, body) {
+  const clientReference = String(body?.clientReference || '').trim();
+  if (!clientReference) throw AppError.validation('clientReference is required');
+  const existing = await Booking.findOne({ clientReference, userId: user._id });
+  if (existing) return getBookingByRef(existing.aplBookingRef, user._id);
+
+  const productType = String(body.service || 'FLIGHT').toUpperCase();
+  if (!['FLIGHT', 'HOTEL', 'BUS'].includes(productType)) {
+    throw AppError.validation('service must be flight, hotel, or bus');
+  }
+  const amount = Number(body.amount);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw AppError.validation('amount is required');
+  }
+  const currency = String(body.currency || user.currency || 'INR').toUpperCase();
+  const clock = bookingClock(new Date(), currency);
+  const serviceName = serviceFolderName(productType);
+  const storedType = productType === 'HOTEL' ? 'HOTEL' : 'FLIGHT';
+  const aplBookingRef = formatAplBookingRef(crypto.randomBytes(4).toString('hex').toUpperCase());
+  const travellers = Array.isArray(body.travellers) ? body.travellers : [];
+  const searchQuery = body.searchQuery || {};
+  const serviceRecord = {
+    aplBookingRef,
+    status: 'CONFIRMED',
+    currency,
+    totalAmount: amount,
+    bookedAtUtc: clock.bookedAtUtc,
+    bookedAtLocal: clock.bookedAtLocal,
+    timeZone: clock.timeZone,
+    guestEmail: user.email,
+    title: body.title || '',
+    searchQuery,
+    clientReference,
   };
+
+  const booking = await Booking.create({
+    aplBookingRef,
+    userId: user._id,
+    customerProfileId: String(user._id),
+    productType: storedType,
+    status: 'CONFIRMED',
+    currency,
+    totalAmount: amount,
+    guestEmail: user.email,
+    guestPhone: body.phone || '',
+    bookedAtUtc: clock.bookedAtUtc,
+    timeZone: clock.timeZone,
+    bookedAtLocal: clock.bookedAtLocal,
+    clientReference,
+    services: { [serviceName]: serviceRecord },
+    searchId: body.searchId || undefined,
+    travellers: travellers.map((person) => ({
+      type: String(person.type || 'ADULT').toUpperCase(),
+      title: person.title || 'Mr',
+      firstName: person.firstName || 'Traveller',
+      lastName: person.lastName || 'Guest',
+    })),
+    items: [
+      {
+        productType: storedType,
+        aplEntityId: body.aplEntityId || clientReference,
+        aplOfferId: body.aplOfferId || clientReference,
+        supplierCode: 'TBO',
+        supplierBookingRef: clientReference,
+        supplierBookingStatus: 'CONFIRMED',
+        amount,
+        currency,
+        snapshot: {
+          flight: productType === 'FLIGHT'
+            ? {
+                airline: { name: body.airline || '' },
+                departure: { airport: searchQuery.fromCode || searchQuery.from, at: searchQuery.depart ? `${searchQuery.depart}T00:00:00+05:30` : undefined },
+                arrival: { airport: searchQuery.toCode || searchQuery.to },
+              }
+            : undefined,
+          hotel: productType === 'HOTEL' ? { name: body.title || searchQuery.destination } : undefined,
+          selectedRoom: productType === 'HOTEL'
+            ? { roomName: body.roomName, checkIn: searchQuery.checkIn, checkOut: searchQuery.checkOut }
+            : undefined,
+        },
+      },
+    ],
+  });
+
+  await Payment.create({
+    bookingId: booking._id,
+    status: 'CAPTURED',
+    amount,
+    currency,
+    provider: 'APL_MOCK_PAY',
+    method: String(body.paymentMethod || 'CARD').toUpperCase(),
+    last4: body.last4 || undefined,
+  });
+
+  return getBookingByRef(aplBookingRef, user._id);
 }
 
 module.exports = {
   createCheckoutSession,
   confirmBookingFromCheckout,
   getBookingByRef,
+  listBookingsForCustomer,
+  claimRecordedBooking,
   listBookingsByProduct,
   getBookingDetailsByProduct,
   cancelBooking,
