@@ -8,6 +8,7 @@ const {
   formatAplBookingRef,
 } = require('../utils/apl-ids');
 const CheckoutSession = require('../database/models/CheckoutSession');
+const Search = require('../database/models/Search');
 const { Booking, Payment } = require('../database/models/Booking');
 const { bookingClock, serviceFolderName } = require('../utils/booking-time');
 const AccountAction = require('../../user/models/AccountAction');
@@ -280,7 +281,12 @@ async function getBookingByRef(aplBookingRef, userId) {
   const payment = await Payment.findOne({ bookingId: booking._id }).sort({
     createdAt: -1,
   });
-  const card = bookingCard(booking, payment);
+  let searchRequest = null;
+  if (booking.searchId) {
+    const search = await Search.findOne({ aplSearchId: booking.searchId }).select("request");
+    searchRequest = search?.request || null;
+  }
+  const card = bookingCard(booking, payment, searchRequest);
   return {
     ...card,
     aplBookingRef: booking.aplBookingRef,
@@ -299,14 +305,122 @@ async function getBookingByRef(aplBookingRef, userId) {
   };
 }
 
-function bookingCard(booking, payment) {
+function clockParts(iso) {
+  const value = String(iso || "");
+  return {
+    at: value,
+    date: value.slice(0, 10),
+    time: value.length >= 16 ? value.slice(11, 16) : "",
+  };
+}
+
+function fareBreakdown(booking, fare, addOns) {
+  const currency = booking.currency || fare?.currency || "INR";
+  const total = Number(booking.totalAmount) || 0;
+  const extras = Array.isArray(addOns) ? addOns : [];
+  const addOnItems = extras
+    .map((item) => ({
+      label: item.label || item.name || item.type || "Add-on",
+      amount: Number(item.amount ?? item.price?.amount ?? item.price) || 0,
+    }))
+    .filter((item) => item.label);
+  const addOnTotal = addOnItems.reduce((sum, item) => sum + item.amount, 0);
+  const taxes = Number(fare?.taxes) || 0;
+  const statedBase = Number(fare?.base ?? fare?.amount);
+  let base = Number.isFinite(statedBase)
+    ? statedBase
+    : Math.max(0, total - taxes - addOnTotal);
+  if (taxes === 0 && addOnTotal === 0 && total > 0) base = total;
+  return {
+    currency,
+    base,
+    taxes,
+    addOns: addOnTotal,
+    addOnItems: addOnItems.filter((item) => item.amount > 0),
+    total,
+  };
+}
+
+function bookingItinerary(booking, searchRequest) {
+  const service = bookingServiceName(booking);
+  const snap = booking.items?.[0]?.snapshot || {};
+  if (service === "bus") {
+    const saved = booking.services?.bus || {};
+    const query = saved.searchQuery || {};
+    return {
+      from: query.from || "",
+      to: query.to || "",
+      date: String(query.date || query.travelDate || "").slice(0, 10),
+      seats: saved.selectedSeat || query.seats || "",
+      operator: saved.operator || "",
+      price: fareBreakdown(booking, null, []),
+    };
+  }
+  if (service === "flight") {
+    const flight = snap.flight || {};
+    const dep = flight.departure || {};
+    const arr = flight.arrival || {};
+    return {
+      airline: flight.airline?.name || "",
+      airlineCode: flight.airline?.code || "",
+      flightNumber: flight.flightNumber || "",
+      cabin: flight.cabinClass || snap.flightFareData?.cabinClass || "",
+      from: {
+        city: dep.airportInfo?.cityName || "",
+        airport: dep.airportInfo?.airportName || "",
+        code: dep.airportInfo?.airportCode || dep.airport || "",
+        ...clockParts(dep.at),
+      },
+      to: {
+        city: arr.airportInfo?.cityName || "",
+        airport: arr.airportInfo?.airportName || "",
+        code: arr.airportInfo?.airportCode || arr.airport || "",
+        ...clockParts(arr.at),
+      },
+      price: fareBreakdown(booking, snap.flightFareData?.price, snap.addOns),
+    };
+  }
+  if (service === "hotel") {
+    const hotel = snap.hotel || {};
+    const room = snap.selectedRoom || {};
+    return {
+      name: hotel.name || "",
+      room: room.roomName || "",
+      city: hotel.location?.city || searchRequest?.city || "",
+      address: hotel.location?.addressLine1 || "",
+      checkIn: String(room.checkIn || searchRequest?.checkIn || "").slice(0, 10),
+      checkOut: String(room.checkOut || searchRequest?.checkOut || "").slice(0, 10),
+      price: fareBreakdown(booking, room.price, snap.addOns),
+    };
+  }
+  return { price: fareBreakdown(booking, null, []) };
+}
+
+function bookingServiceName(booking) {
+  const folders = booking.services && typeof booking.services === 'object'
+    ? Object.keys(booking.services)
+    : [];
+  if (folders.includes('bus')) return 'bus';
+  if (folders.includes('hotel')) return 'hotel';
+  if (folders.includes('flight')) return 'flight';
+  return String(booking.productType || '').toLowerCase();
+}
+
+function bookingCard(booking, payment, searchRequest) {
   const item = booking.items?.[0];
   const snap = item?.snapshot || {};
   const flight = snap.flight || {};
-  const service = String(booking.productType || "").toLowerCase();
+  const service = bookingServiceName(booking);
   let title = booking.productType;
   const searchQuery = {};
-  if (booking.productType === 'FLIGHT') {
+  if (service === 'bus') {
+    const saved = booking.services?.bus || {};
+    const query = saved.searchQuery || {};
+    searchQuery.from = query.from || '';
+    searchQuery.to = query.to || '';
+    searchQuery.date = String(query.date || query.travelDate || '').slice(0, 10);
+    title = saved.title || [searchQuery.from, searchQuery.to].filter(Boolean).join(' → ') || 'Bus';
+  } else if (booking.productType === 'FLIGHT' || service === 'flight') {
     const dep = flight.departure?.airportInfo?.cityName || flight.departure?.airport;
     const arr = flight.arrival?.airportInfo?.cityName || flight.arrival?.airport;
     title = [flight.airline?.name || flight.airline, dep && arr ? `${dep} → ${arr}` : null]
@@ -318,8 +432,13 @@ function bookingCard(booking, payment) {
   } else if (booking.productType === 'HOTEL') {
     title = [snap.hotel?.name, snap.selectedRoom?.roomName].filter(Boolean).join(' · ');
     searchQuery.destination = snap.hotel?.name || snap.hotel?.location?.city || '';
-    searchQuery.checkIn = String(snap.selectedRoom?.checkIn || snap.stay?.checkIn || '').slice(0, 10);
-    searchQuery.checkOut = String(snap.selectedRoom?.checkOut || snap.stay?.checkOut || '').slice(0, 10);
+    searchQuery.checkIn = String(
+      snap.selectedRoom?.checkIn || snap.stay?.checkIn || searchRequest?.checkIn || '',
+    ).slice(0, 10);
+    searchQuery.checkOut = String(
+      snap.selectedRoom?.checkOut || snap.stay?.checkOut || searchRequest?.checkOut || '',
+    ).slice(0, 10);
+    if (!searchQuery.destination && searchRequest?.city) searchQuery.destination = searchRequest.city;
   }
   const status = String(booking.status || '').toUpperCase();
   const today = new Intl.DateTimeFormat('en-CA', {
@@ -334,7 +453,7 @@ function bookingCard(booking, payment) {
     month: '2-digit',
     day: '2-digit',
   }).format(new Date(booking.bookedAtUtc || booking.createdAt || Date.now()));
-  const travelDay = searchQuery.checkOut || searchQuery.depart || '';
+  const travelDay = searchQuery.checkOut || searchQuery.depart || searchQuery.date || '';
   let tripPhase = 'upcoming';
   if (status === 'CANCELLED' || status === 'FAILED') tripPhase = 'cancelled';
   else if ((travelDay && travelDay < today) || (!travelDay && bookedDay < today)) {
@@ -366,6 +485,7 @@ function bookingCard(booking, payment) {
     bookedAtUtc: booking.bookedAtUtc || booking.createdAt,
     bookedAtLocal: booking.bookedAtLocal,
     timeZone: booking.timeZone,
+    itinerary: bookingItinerary(booking, searchRequest),
   };
 }
 
@@ -398,8 +518,13 @@ async function listBookingsForCustomer(user) {
     .sort({ createdAt: -1 })
     .limit(100);
   const payments = await latestPaymentsFor(bookings);
+  const searchIds = [...new Set(bookings.map((booking) => booking.searchId).filter(Boolean))];
+  const searches = searchIds.length
+    ? await Search.find({ aplSearchId: { $in: searchIds } }).select('aplSearchId request')
+    : [];
+  const searchById = new Map(searches.map((search) => [search.aplSearchId, search.request || {}]));
   const cards = bookings.map((booking) =>
-    bookingCard(booking, payments.get(String(booking._id))),
+    bookingCard(booking, payments.get(String(booking._id)), searchById.get(booking.searchId)),
   );
   const services = {};
   for (const card of cards) {
