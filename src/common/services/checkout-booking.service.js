@@ -315,22 +315,25 @@ function clockParts(iso) {
 }
 
 function fareBreakdown(booking, fare, addOns) {
-  const currency = booking.currency || fare?.currency || "INR";
+  const currency = booking.currency || fare?.currency || 'INR';
   const total = Number(booking.totalAmount) || 0;
   const extras = Array.isArray(addOns) ? addOns : [];
   const addOnItems = extras
     .map((item) => ({
-      label: item.label || item.name || item.type || "Add-on",
+      label: item.label || item.name || item.type || 'Add-on',
       amount: Number(item.amount ?? item.price?.amount ?? item.price) || 0,
     }))
     .filter((item) => item.label);
   const addOnTotal = addOnItems.reduce((sum, item) => sum + item.amount, 0);
   const taxes = Number(fare?.taxes) || 0;
   const statedBase = Number(fare?.base ?? fare?.amount);
+  // Booked total is the source of truth for what the customer paid.
   let base = Number.isFinite(statedBase)
     ? statedBase
     : Math.max(0, total - taxes - addOnTotal);
-  if (taxes === 0 && addOnTotal === 0 && total > 0) base = total;
+  if (total > 0) {
+    base = Math.max(0, total - taxes - addOnTotal);
+  }
   return {
     currency,
     base,
@@ -338,6 +341,7 @@ function fareBreakdown(booking, fare, addOns) {
     addOns: addOnTotal,
     addOnItems: addOnItems.filter((item) => item.amount > 0),
     total,
+    fareLabel: fare?.fareType || fare?.label || null,
   };
 }
 
@@ -356,28 +360,52 @@ function bookingItinerary(booking, searchRequest) {
       price: fareBreakdown(booking, null, []),
     };
   }
-  if (service === "flight") {
+  if (service === 'flight') {
     const flight = snap.flight || {};
     const dep = flight.departure || {};
     const arr = flight.arrival || {};
+    const chargedAmount =
+      Number(snap.chargedUnitAmount) ||
+      Number(snap.selectedFareQuote?.amount) ||
+      Number(snap.flightFareData?.price?.amount) ||
+      null;
+    const farePrice = {
+      amount: chargedAmount,
+      currency:
+        snap.selectedFareQuote?.currency ||
+        snap.flightFareData?.price?.currency ||
+        booking.currency ||
+        'INR',
+      fareType:
+        snap.fareLabel ||
+        snap.selectedFareQuote?.label ||
+        snap.flightFareData?.fareType ||
+        null,
+      label:
+        snap.fareLabel ||
+        snap.selectedFareQuote?.label ||
+        snap.flightFareData?.fareType ||
+        null,
+    };
     return {
-      airline: flight.airline?.name || "",
-      airlineCode: flight.airline?.code || "",
-      flightNumber: flight.flightNumber || "",
-      cabin: flight.cabinClass || snap.flightFareData?.cabinClass || "",
+      airline: flight.airline?.name || '',
+      airlineCode: flight.airline?.code || '',
+      flightNumber: flight.flightNumber || '',
+      cabin: flight.cabinClass || snap.flightFareData?.cabinClass || '',
+      fareLabel: farePrice.label,
       from: {
-        city: dep.airportInfo?.cityName || "",
-        airport: dep.airportInfo?.airportName || "",
-        code: dep.airportInfo?.airportCode || dep.airport || "",
+        city: dep.airportInfo?.cityName || '',
+        airport: dep.airportInfo?.airportName || '',
+        code: dep.airportInfo?.airportCode || dep.airport || '',
         ...clockParts(dep.at),
       },
       to: {
-        city: arr.airportInfo?.cityName || "",
-        airport: arr.airportInfo?.airportName || "",
-        code: arr.airportInfo?.airportCode || arr.airport || "",
+        city: arr.airportInfo?.cityName || '',
+        airport: arr.airportInfo?.airportName || '',
+        code: arr.airportInfo?.airportCode || arr.airport || '',
         ...clockParts(arr.at),
       },
-      price: fareBreakdown(booking, snap.flightFareData?.price, snap.addOns),
+      price: fareBreakdown(booking, farePrice, snap.addOns),
     };
   }
   if (service === "hotel") {

@@ -111,6 +111,14 @@ async function checkoutFlight(dto) {
   const quote = quoteFlightPrice(dto, fare);
   assertExactPrice(quote, dto.confirmPrice);
 
+  const selectedQuote = dto.selectedFareQuote || null;
+  const chargedUnitAmount = Number(quote.unitAmount) || Number(fare.price?.amount) || 0;
+  const fareLabel =
+    selectedQuote?.label ||
+    selectedQuote?.fareType ||
+    fare.fareType ||
+    'SAVER';
+
   return createCheckoutSession({
     productType: 'FLIGHT',
     searchId: dto.searchId,
@@ -123,12 +131,25 @@ async function checkoutFlight(dto) {
       currency: quote.currency,
       baseAmount: quote.baseAmount,
       addonsAmount: quote.addonsAmount,
+      unitAmount: chargedUnitAmount,
+      fareLabel,
     },
     offerSnapshot: {
       aplFlightId: details.aplFlightId,
       aplFareId: fare.aplFareId,
       flight: details.flight,
-      flightFareData: fare,
+      // Persist the charged family fare (not only the supplier base row).
+      flightFareData: {
+        ...fare,
+        fareType: String(fareLabel).toUpperCase(),
+        price: {
+          amount: chargedUnitAmount,
+          currency: quote.currency,
+        },
+      },
+      selectedFareQuote: selectedQuote,
+      chargedUnitAmount,
+      fareLabel,
       fareRules: details.fareRules,
       addOns: quote.selectedAddOns,
     },
