@@ -225,12 +225,35 @@ function validateCheckoutBody(body) {
   const baggage = parseAddonCodes(addOns.baggage, 'addOns.baggage', details);
   const meals = parseAddonCodes(addOns.meals, 'addOns.meals', details);
   const confirmPrice = parseConfirmPrice(body, details, 'seat, baggage, and meal add-ons');
+
+  let selectedFareQuote = null;
+  const rawSelected = body.selectedFareQuote || body.fareQuote || null;
+  if (rawSelected != null) {
+    if (
+      typeof rawSelected !== 'object' ||
+      !Number.isFinite(Number(rawSelected.amount)) ||
+      Number(rawSelected.amount) <= 0
+    ) {
+      details.push('selectedFareQuote.amount must be a positive number when provided');
+    } else {
+      selectedFareQuote = {
+        amount: Number(rawSelected.amount),
+        currency: String(rawSelected.currency || confirmPrice?.currency || 'INR')
+          .trim()
+          .toUpperCase(),
+        label: rawSelected.label ? String(rawSelected.label) : undefined,
+        fareType: rawSelected.fareType ? String(rawSelected.fareType) : undefined,
+      };
+    }
+  }
+
   if (details.length) throw AppError.validation('Invalid checkout request', details);
 
   return {
     ...base,
     addOns: { seats, baggage, meals },
     confirmPrice,
+    selectedFareQuote,
     contact: {
       email: body.contact.email.trim(),
       phone: String(body.contact.phone).trim(),

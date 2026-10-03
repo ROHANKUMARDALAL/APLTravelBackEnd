@@ -7,7 +7,10 @@ const { formatAplSearchId } = require('../../common/utils/apl-ids');
 const { getAllFlightAdapters } = require('../suppliers/registry');
 const { normalizeCandidate } = require('../utils/flight-normalization');
 const { resolveFlights } = require('../utils/flight-entity-resolution');
-const { consolidateFlightOffers } = require('../utils/offer-consolidation');
+const {
+  consolidateFlightOffers,
+  expandFareFamilies,
+} = require('../utils/offer-consolidation');
 const Supplier = require('../../common/database/models/Supplier');
 const SupplierRawPayload = require('../../common/database/models/SupplierRawPayload');
 const { logSupplierOutcomes } = require('../../common/services/service-log.service');
@@ -227,11 +230,24 @@ async function getFlightDetails({ searchId, aplFlightId, aplFareId }) {
     throw AppError.notFound(`Flight not found in search: ${aplFlightId}`);
   }
 
-  const flightFareData = flight.flightFareData || [];
+  // Expand single-fare supplier rows into Saver/Publish/Flexi/Corporate so
+  // checkout can resolve dynamic family selections from older search caches.
+  const flightFareData = expandFareFamilies(
+    flight.flightFareData || [],
+    flight.aplFlightId,
+  );
   let selectedFlightFareData = null;
 
   if (aplFareId) {
-    selectedFlightFareData = findFareOnFlight(flight, aplFareId);
+    selectedFlightFareData =
+      findFareOnFlight({ ...flight, flightFareData }, aplFareId) ||
+      flightFareData.find((f) => f.familyOf === aplFareId) ||
+      null;
+    if (!selectedFlightFareData) {
+      // Fall back to the lowest/base fare; checkout may still accept a
+      // selectedFareQuote that matches a known family tier.
+      selectedFlightFareData = flightFareData[0] || null;
+    }
     if (!selectedFlightFareData) {
       throw AppError.notFound(
         `Fare not found on flight ${aplFlightId}: ${aplFareId}`,
@@ -257,7 +273,7 @@ async function getFlightDetails({ searchId, aplFlightId, aplFareId }) {
       departure: flight.departure,
       arrival: flight.arrival,
       supplierMappings: flight.supplierMappings,
-      lowestPrice: flight.lowestPrice,
+      lowestPrice: flight.lowestPrice || fareForRules?.price || null,
     },
     /** All supplier fares for this canonical flight */
     flightFareData,

@@ -22,6 +22,49 @@ function airportBlock(code) {
   };
 }
 
+/** Family tiers used by B2C when a supplier returns a single fare. */
+const FARE_FAMILY_TIERS = [
+  { fareType: 'SAVER', multiplier: 1, refundable: false, cabinKg: 7, checkinKg: 15 },
+  { fareType: 'PUBLISH', multiplier: 1.08, refundable: false, cabinKg: 7, checkinKg: 20 },
+  { fareType: 'FLEXI', multiplier: 1.18, refundable: true, cabinKg: 7, checkinKg: 25 },
+  { fareType: 'CORPORATE', multiplier: 1.26, refundable: true, cabinKg: 10, checkinKg: 30 },
+];
+
+function expandFareFamilies(flightFareData, aplFlightId) {
+  if (!Array.isArray(flightFareData) || flightFareData.length !== 1) {
+    return flightFareData;
+  }
+  const base = flightFareData[0];
+  const baseAmount = Number(base?.price?.amount);
+  const currency = base?.price?.currency || 'INR';
+  if (!Number.isFinite(baseAmount) || baseAmount <= 0) return flightFareData;
+
+  return FARE_FAMILY_TIERS.map((tier) => {
+    const amount = Math.round(baseAmount * tier.multiplier);
+    const fareKey = [
+      aplFlightId,
+      base.supplier || 'FAMILY',
+      base.supplierOfferId || base.aplFareId || 'BASE',
+      tier.fareType,
+    ].join('|');
+    return {
+      ...base,
+      aplFareId:
+        tier.multiplier === 1
+          ? base.aplFareId
+          : formatAplOfferId(stableSeqFromKey(fareKey)),
+      fareType: tier.fareType,
+      refundable: tier.refundable,
+      baggage: {
+        cabinKg: tier.cabinKg,
+        checkinKg: tier.checkinKg,
+      },
+      price: { amount, currency },
+      familyOf: base.aplFareId,
+    };
+  });
+}
+
 function consolidateFlightOffers(clusters) {
   return clusters.map((cluster) => {
     const mappingsMap = new Map();
@@ -56,7 +99,9 @@ function consolidateFlightOffers(clusters) {
       });
     }
 
-    flightFareData.sort((a, b) => a.price.amount - b.price.amount);
+    const fares = expandFareFamilies(flightFareData, cluster.aplFlightId).sort(
+      (a, b) => a.price.amount - b.price.amount,
+    );
     const c = cluster.canonical;
     const firstSeg = c.segments[0];
     const lastSeg = c.segments[c.segments.length - 1];
@@ -91,13 +136,13 @@ function consolidateFlightOffers(clusters) {
         at: lastSeg.arrivalAt,
       },
       supplierMappings: Array.from(mappingsMap.values()),
-      flightFareData,
+      flightFareData: fares,
       lowestPrice: {
-        amount: flightFareData[0].price.amount,
-        currency: flightFareData[0].price.currency,
+        amount: fares[0].price.amount,
+        currency: fares[0].price.currency,
       },
     };
   });
 }
 
-module.exports = { consolidateFlightOffers };
+module.exports = { consolidateFlightOffers, expandFareFamilies };
