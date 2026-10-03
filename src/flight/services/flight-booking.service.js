@@ -17,12 +17,55 @@ const {
 
 const FARE_TIER_MULTIPLIERS = [1, 1.08, 1.18, 1.26];
 
+function isInfant(traveller) {
+  const type = String(traveller?.type || '').toUpperCase();
+  return type === 'INFANT' || type === 'INF';
+}
+
+function payingTravellerCount(travellers) {
+  const list = Array.isArray(travellers) ? travellers : [];
+  const paying = list.filter((traveller) => !isInfant(traveller)).length;
+  return Math.max(1, paying || list.length || 1);
+}
+
+function normalizeFareLabel(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '');
+}
+
 function isAcceptedFareUnit(baseAmount, unitAmount) {
   const base = Number(baseAmount);
   const unit = Number(unitAmount);
   if (!Number.isFinite(base) || !Number.isFinite(unit) || unit <= 0) return false;
   if (unit === base) return true;
   return FARE_TIER_MULTIPLIERS.some((mult) => Math.round(base * mult) === unit);
+}
+
+/**
+ * Pick the expanded family row (Saver/Publish/Flexi/Corporate) that matches
+ * the client's selectedFareQuote label or unit amount when possible.
+ */
+function resolveSelectedFare(details, dto) {
+  const list = Array.isArray(details?.flightFareData) ? details.flightFareData : [];
+  const fallback = details?.selectedFlightFareData || list[0] || null;
+  const selected = dto.selectedFareQuote || dto.fareQuote || null;
+  if (!selected || !list.length) return fallback;
+
+  const label = normalizeFareLabel(selected.label || selected.fareType);
+  if (label) {
+    const byLabel = list.find((fare) => normalizeFareLabel(fare.fareType) === label);
+    if (byLabel) return byLabel;
+  }
+
+  const amount = Number(selected.amount);
+  if (Number.isFinite(amount) && amount > 0) {
+    const byAmount = list.find((fare) => Number(fare?.price?.amount) === amount);
+    if (byAmount) return byAmount;
+  }
+
+  return fallback;
 }
 
 /**
@@ -55,7 +98,7 @@ function resolveUnitFareAmount(fare, dto) {
     (dto.addOns?.seats?.length || 0) +
     (dto.addOns?.baggage?.length || 0) +
     (dto.addOns?.meals?.length || 0);
-  const payableTravellers = dto.travellers.filter((t) => t.type !== 'INFANT').length;
+  const payableTravellers = payingTravellerCount(dto.travellers);
   const confirmAmount = Number(dto.confirmPrice?.amount);
   if (
     addOnCount === 0 &&
@@ -81,10 +124,7 @@ function quoteFlightPrice(dto, fare) {
   const seats = sumSelected(catalog.seats, dto.addOns?.seats || [], 'seat');
   const baggage = sumSelected(catalog.baggage, dto.addOns?.baggage || [], 'baggage');
   const meals = sumSelected(catalog.meals, dto.addOns?.meals || [], 'meal');
-  const payableTravellers = Math.max(
-    1,
-    dto.travellers.filter((t) => t.type !== 'INFANT').length,
-  );
+  const payableTravellers = payingTravellerCount(dto.travellers);
   const unitAmount = resolveUnitFareAmount(fare, dto);
   const baseAmount = unitAmount * payableTravellers;
   const addonsAmount = seats.amount + baggage.amount + meals.amount;
@@ -95,6 +135,7 @@ function quoteFlightPrice(dto, fare) {
     addonsAmount,
     amount: baseAmount + addonsAmount,
     unitAmount,
+    payableTravellers,
     selectedAddOns,
   };
 }
@@ -103,7 +144,7 @@ async function checkoutFlight(dto) {
   const details = await getFlightDetails(dto);
   await revalidateFlightOffer(dto);
 
-  const fare = details.selectedFlightFareData;
+  const fare = resolveSelectedFare(details, dto);
   if (!fare) {
     throw AppError.validation('selectedFlightFareData missing — pass aplFareId');
   }
