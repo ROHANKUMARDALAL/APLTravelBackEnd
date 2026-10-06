@@ -5,9 +5,14 @@ const { asyncHandler } = require('../../common/middleware/error-handler');
 const { sendSuccess } = require('../../common/response/envelope');
 const { requireLogin, optionalLogin } = require('../../common/middleware/require-login');
 const {
+  requireTransactionTenant,
+  requireOfferedService,
+} = require('../../tenant/middleware/require-transaction-tenant');
+const {
   searchHotels,
   getHotelDetails,
   revalidateHotelOffer,
+  sanitizeHotelSearchForPublic,
 } = require('../services/hotel-search.service');
 const {
   checkoutHotel,
@@ -31,6 +36,9 @@ const {
 
 const router = express.Router();
 
+// Phase 9: trusted host → DSA; offer rule; ignore client dsaId.
+router.use(requireTransactionTenant, requireOfferedService('hotel'));
+
 /** Step 1 — search cities. POST /api/v1/hotels/cities/search */
 router.post(
   '/cities/search',
@@ -50,8 +58,10 @@ router.post(
     const result = await searchHotels(dto, forced.length > 0 ? forced : undefined, {
       requestId: req.requestId,
       userId: req.user?._id,
+      dsaId: req.tenant?.dsaId,
+      tenant: req.tenant,
     });
-    return sendSuccess(res, result);
+    return sendSuccess(res, sanitizeHotelSearchForPublic(result));
   }),
 );
 
@@ -60,7 +70,7 @@ router.post(
   '/details',
   asyncHandler(async (req, res) => {
     const dto = validateHotelDetailsBody(req.body);
-    return sendSuccess(res, await getHotelDetails(dto));
+    return sendSuccess(res, await getHotelDetails(dto, { tenant: req.tenant }));
   }),
 );
 
@@ -69,7 +79,7 @@ router.post(
   '/revalidate',
   asyncHandler(async (req, res) => {
     const dto = validateHotelRoomLookup(req.body);
-    return sendSuccess(res, await revalidateHotelOffer(dto));
+    return sendSuccess(res, await revalidateHotelOffer(dto, { tenant: req.tenant }));
   }),
 );
 
@@ -78,7 +88,13 @@ router.post(
   '/checkout',
   asyncHandler(async (req, res) => {
     const dto = validateHotelCheckoutBody(req.body);
-    return sendSuccess(res, await checkoutHotel(dto));
+    return sendSuccess(
+      res,
+      await checkoutHotel(dto, {
+        tenant: req.tenant,
+        requestId: req.requestId,
+      }),
+    );
   }),
 );
 
@@ -88,7 +104,13 @@ router.post(
   requireLogin,
   asyncHandler(async (req, res) => {
     const dto = validateHotelBookBody(req.body);
-    return sendSuccess(res, await bookHotel(dto, req.user));
+    return sendSuccess(
+      res,
+      await bookHotel(dto, req.user, {
+        tenant: req.tenant,
+        requestId: req.requestId,
+      }),
+    );
   }),
 );
 
@@ -96,7 +118,10 @@ router.get(
   '/bookings',
   requireLogin,
   asyncHandler(async (req, res) => {
-    return sendSuccess(res, await listHotelBookings(req.user._id));
+    return sendSuccess(
+      res,
+      await listHotelBookings(req.user._id, { tenant: req.tenant }),
+    );
   }),
 );
 
@@ -104,7 +129,10 @@ router.post(
   '/bookings/details',
   requireLogin,
   asyncHandler(async (req, res) => {
-    return sendSuccess(res, await getHotelBookingDetails(req.body || {}, req.user));
+    return sendSuccess(
+      res,
+      await getHotelBookingDetails(req.body || {}, req.user, { tenant: req.tenant }),
+    );
   }),
 );
 
@@ -112,7 +140,13 @@ router.post(
   '/bookings/cancel',
   requireLogin,
   asyncHandler(async (req, res) => {
-    return sendSuccess(res, await cancelHotelBooking(req.body || {}, req.user));
+    return sendSuccess(
+      res,
+      await cancelHotelBooking(req.body || {}, req.user, {
+        tenant: req.tenant,
+        requestId: req.requestId,
+      }),
+    );
   }),
 );
 

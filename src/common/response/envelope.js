@@ -13,6 +13,7 @@ const NumericErrorCode = {
   [ErrorCode.SUPPLIER_ERROR]: 1006,
   [ErrorCode.DATABASE_UNAVAILABLE]: 1007,
   [ErrorCode.UNAUTHORIZED]: 1009,
+  [ErrorCode.FORBIDDEN]: 1010,
   PAYMENT_FAILED: 1008,
 };
 

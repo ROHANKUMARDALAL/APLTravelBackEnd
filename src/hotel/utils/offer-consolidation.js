@@ -4,9 +4,9 @@ const {
   formatAplRoomId,
   stableSeqFromKey,
 } = require('../../common/utils/apl-ids');
-const { applyMarkup } = require('./pricing');
+const { calculatePrice } = require('../../pricing/services/pricing-engine.service');
 
-function consolidateOffers(clusters) {
+function consolidateOffers(clusters, pricingContext = null) {
   return clusters.map((cluster) => {
     const mappingsMap = new Map();
     const availableRooms = [];
@@ -17,7 +17,19 @@ function consolidateOffers(clusters) {
         supplierHotelId: member.supplierHotelId,
       });
 
-      const priced = applyMarkup(member.supplierPrice);
+      const priced = calculatePrice({
+        supplierPrice: member.supplierPrice,
+        supplierCode: member.supplier,
+        context: pricingContext || {
+          rules: [],
+          serviceCode: 'hotel',
+          dsaId: null,
+          at: new Date(),
+          pricingVersion: '12.0',
+        },
+        includeInternal: true,
+      });
+
       const roomKey = [
         cluster.aplHotelId,
         member.supplier,
@@ -32,12 +44,13 @@ function consolidateOffers(clusters) {
         occupancy: member.occupancy || { maxAdults: 2, maxChildren: 0 },
         mealPlan: member.mealPlan,
         cancellation: { refundable: member.refundable },
-        price: priced.customer,
+        price: priced.customerPrice,
         supplier: member.supplier,
         supplierOfferId: member.supplierOfferId,
         supplierHotelId: member.supplierHotelId,
         supplierReference: member.supplierReference,
-        supplierPrice: priced.supplier,
+        supplierPrice: priced.supplierPrice,
+        commercialSnapshot: priced.commercialSnapshot,
       });
     }
 
@@ -69,4 +82,22 @@ function consolidateOffers(clusters) {
   });
 }
 
-module.exports = { consolidateOffers };
+function sanitizeHotelSearchForPublic(payload) {
+  if (!payload || !Array.isArray(payload.hotels)) return payload;
+  return {
+    ...payload,
+    hotels: payload.hotels.map((hotel) => ({
+      ...hotel,
+      availableRooms: (hotel.availableRooms || []).map((room) => {
+        const {
+          supplierPrice: _sp,
+          commercialSnapshot: _cs,
+          ...publicRoom
+        } = room;
+        return publicRoom;
+      }),
+    })),
+  };
+}
+
+module.exports = { consolidateOffers, sanitizeHotelSearchForPublic };

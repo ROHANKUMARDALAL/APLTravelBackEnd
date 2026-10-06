@@ -10,13 +10,26 @@ const { resolveFlights } = require('../utils/flight-entity-resolution');
 const {
   consolidateFlightOffers,
   expandFareFamilies,
+  sanitizeFlightSearchForPublic,
 } = require('../utils/offer-consolidation');
+const { createPricingContext } = require('../../pricing/services/pricing-engine.service');
 const Supplier = require('../../common/database/models/Supplier');
-const SupplierRawPayload = require('../../common/database/models/SupplierRawPayload');
 const { logSupplierOutcomes } = require('../../common/services/service-log.service');
+const { writeLifecycleLog } = require('../../common/services/lifecycle-log.service');
+const {
+  buildSupplierExecutionPlan,
+} = require('../../suppliers/services/supplier-routing.service');
+const {
+  resolveSupplierCredentials,
+  toFailedOutcome,
+  SupplierRuntimeError,
+} = require('../../suppliers/runtime');
 const Search = require('../../common/database/models/Search');
 const { getCityByCode } = require('../data/airports');
 const { flightAddOnCatalog } = require('../data/addons');
+const {
+  assertSearchTenantMatch,
+} = require('../../tenant/services/transaction-tenant.service');
 
 async function ensureSuppliers() {
   for (const code of ['TBO', 'TRIPJACK', 'KAFILA']) {
@@ -67,24 +80,89 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     crypto.randomBytes(4).toString('hex').toUpperCase(),
   );
   const forcedFailures = new Set(failureList);
-  const adapters = getAllFlightAdapters();
+
+  await writeLifecycleLog({
+    stage: 'NORMALIZED_REQUEST',
+    direction: 'INBOUND',
+    requestId: context.requestId,
+    dsaId: context.dsaId,
+    userId: context.userId,
+    service: 'FLIGHT',
+    operation: 'searchFlights',
+    searchId: aplSearchId,
+    status: 'SUCCESS',
+    request: criteria,
+  });
+
+  let plan;
+  if (context.dsaId) {
+    plan = await buildSupplierExecutionPlan({
+      dsaId: context.dsaId,
+      serviceCode: 'flight',
+      operation: 'searchFlights',
+    });
+  } else {
+    plan = {
+      mode: 'LEGACY_MOCK_FANOUT',
+      reason: 'NO_TRANSACTION_TENANT',
+      strategy: 'PARALLEL',
+      suppliers: getAllFlightAdapters().map((adapter, index) => ({
+        supplierCode: adapter.code,
+        priority: index + 1,
+        adapter,
+        supplierId: null,
+      })),
+    };
+  }
+
+  const adapterContext = {
+    requestId: context.requestId,
+    dsaId: context.dsaId,
+    service: 'FLIGHT',
+    operation: 'searchFlights',
+    routingMode: plan.mode,
+    routingStrategy: plan.strategy,
+  };
 
   const settled = await Promise.all(
-    adapters.map(async (adapter) => {
+    plan.suppliers.map(async (entry) => {
+      const adapter = entry.adapter;
+      const started = Date.now();
       try {
+        const credentialRef =
+          entry.credentialRef ||
+          `SUPPLIER_${String(entry.supplierCode || adapter.code).toUpperCase()}`;
+        const resolved = resolveSupplierCredentials({
+          credentialRef,
+          environment: entry.environment || 'TEST',
+          supplierCode: entry.supplierCode || adapter.code,
+        });
+
         const outcome = await adapter.searchFlights(criteria, {
           simulateFailure: forcedFailures.has(adapter.code),
+          ...adapterContext,
+          environment: entry.environment || 'TEST',
+          supplierId: entry.supplierId || null,
+          credentialRef,
+          /** Safe metadata for adapter diagnostics (no secret values). */
+          credentialMeta: resolved.meta,
+          /**
+           * In-memory secrets for real adapters only.
+           * Must never be copied into supplierRequest/rawPayload/ServiceLog.
+           */
+          credentials: resolved.secrets,
+          httpTimeoutMs: undefined,
         });
-        return { adapter, outcome };
+        return { adapter, outcome, supplierId: entry.supplierId };
       } catch (err) {
+        const durationMs =
+          err instanceof SupplierRuntimeError && err.details?.durationMs != null
+            ? err.details.durationMs
+            : Date.now() - started;
         return {
           adapter,
-          outcome: {
-            status: 'FAILED',
-            durationMs: 0,
-            errorCode: 'SUPPLIER_EXCEPTION',
-            errorMessage: err instanceof Error ? err.message : 'Unknown error',
-          },
+          supplierId: entry.supplierId,
+          outcome: toFailedOutcome(err, durationMs),
         };
       }
     }),
@@ -122,7 +200,12 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
 
   const normalized = candidates.map((c) => normalizeCandidate(c));
   const clusters = resolveFlights(normalized);
-  const flights = consolidateFlightOffers(clusters).sort(
+  const pricingContext = await createPricingContext({
+    dsaId: context.dsaId || null,
+    serviceCode: 'flight',
+    tripType: criteria.tripType || null,
+  });
+  const flights = consolidateFlightOffers(clusters, pricingContext).sort(
     (a, b) => a.lowestPrice.amount - b.lowestPrice.amount,
   );
 
@@ -184,6 +267,8 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     aplSearchId,
     type: 'FLIGHT',
     status,
+    dsaId: context.dsaId || undefined,
+    requestId: context.requestId || undefined,
     request: criteria,
     results: payload,
     resultCount: flights.length,
@@ -198,20 +283,9 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     expiresAt: new Date(Date.now() + 30 * 60 * 1000),
   });
 
-  for (const { adapter, outcome } of settled) {
-    await SupplierRawPayload.create({
-      supplierCode: adapter.code,
-      searchId: aplSearchId,
-      operation: 'FLIGHT_SEARCH',
-      payload:
-        outcome.status === 'SUCCESS'
-          ? outcome.rawPayload
-      : { errorCode: outcome.errorCode, errorMessage: outcome.errorMessage },
-  });
-  }
-
   await logSupplierOutcomes({
     requestId: context.requestId,
+    dsaId: context.dsaId,
     userId: context.userId,
     service: 'FLIGHT',
     operation: 'searchFlights',
@@ -220,11 +294,34 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     settled,
   });
 
+  await writeLifecycleLog({
+    stage: 'NORMALIZED_RESPONSE',
+    direction: 'SUPPLIER',
+    requestId: context.requestId,
+    dsaId: context.dsaId,
+    userId: context.userId,
+    service: 'FLIGHT',
+    operation: 'searchFlights',
+    searchId: aplSearchId,
+    status: status === 'COMPLETED' ? 'SUCCESS' : 'PARTIAL',
+    result: {
+      searchId: aplSearchId,
+      status,
+      flightCount: flights.length,
+      suppliers: supplierMeta,
+      routing: { mode: plan.mode, strategy: plan.strategy, reason: plan.reason },
+      pricingVersion: pricingContext.pricingVersion,
+    },
+  });
+
   return payload;
 }
 
-async function getFlightDetails({ searchId, aplFlightId, aplFareId }) {
+async function getFlightDetails({ searchId, aplFlightId, aplFareId }, context = {}) {
   const search = await getSearchOrThrow(searchId);
+  if (context.tenant) {
+    assertSearchTenantMatch(search, context.tenant);
+  }
   const flight = findFlightInResults(search.results, aplFlightId);
   if (!flight) {
     throw AppError.notFound(`Flight not found in search: ${aplFlightId}`);
@@ -297,13 +394,19 @@ async function getFlightDetails({ searchId, aplFlightId, aplFareId }) {
   };
 }
 
-async function revalidateFlightOffer({ searchId, aplFlightId, aplFareId }) {
+async function revalidateFlightOffer(
+  { searchId, aplFlightId, aplFareId },
+  context = {},
+) {
   if (!aplFareId) {
     throw AppError.validation(
       'aplFareId is required for revalidate (select a fare from flightFareData)',
     );
   }
-  const details = await getFlightDetails({ searchId, aplFlightId, aplFareId });
+  const details = await getFlightDetails(
+    { searchId, aplFlightId, aplFareId },
+    context,
+  );
   const fare = details.selectedFlightFareData;
   return {
     searchId,
@@ -327,4 +430,5 @@ module.exports = {
   findFlightInResults,
   findFareOnFlight,
   getSearchOrThrow,
+  sanitizeFlightSearchForPublic,
 };

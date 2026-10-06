@@ -34,9 +34,14 @@ const mockTripjackAdapter = {
 
     const hotels = getMockTripjackHotels(criteria);
 
+    const supplierRequest = {
+      environment: options.environment || 'TEST',
+      criteria,
+    };
     return {
       status: 'SUCCESS',
       durationMs: Date.now() - started,
+      supplierRequest,
       hotels,
       rawPayload: { mock: true, supplier: 'TRIPJACK', results: hotels },
     };

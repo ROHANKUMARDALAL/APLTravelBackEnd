@@ -5,9 +5,14 @@ const { asyncHandler } = require('../../common/middleware/error-handler');
 const { sendSuccess } = require('../../common/response/envelope');
 const { requireLogin, optionalLogin } = require('../../common/middleware/require-login');
 const {
+  requireTransactionTenant,
+  requireOfferedService,
+} = require('../../tenant/middleware/require-transaction-tenant');
+const {
   searchFlights,
   getFlightDetails,
   revalidateFlightOffer,
+  sanitizeFlightSearchForPublic,
 } = require('../services/flight-search.service');
 const {
   checkoutFlight,
@@ -30,6 +35,9 @@ const {
 } = require('../validators/flight.validation');
 
 const router = express.Router();
+
+// Phase 9: trusted host → DSA; offer rule; ignore client dsaId.
+router.use(requireTransactionTenant, requireOfferedService('flight'));
 
 /**
  * Step 1 — search airports for a city (e.g. Delhi → DEL / HDO / DXN).
@@ -56,8 +64,10 @@ router.post(
     const result = await searchFlights(dto, forced.length > 0 ? forced : undefined, {
       requestId: req.requestId,
       userId: req.user?._id,
+      dsaId: req.tenant?.dsaId,
+      tenant: req.tenant,
     });
-    return sendSuccess(res, result);
+    return sendSuccess(res, sanitizeFlightSearchForPublic(result));
   }),
 );
 
@@ -65,7 +75,7 @@ router.post(
   '/details',
   asyncHandler(async (req, res) => {
     const dto = validateDetailsBody(req.body);
-    return sendSuccess(res, await getFlightDetails(dto));
+    return sendSuccess(res, await getFlightDetails(dto, { tenant: req.tenant }));
   }),
 );
 
@@ -73,7 +83,7 @@ router.post(
   '/revalidate',
   asyncHandler(async (req, res) => {
     const dto = validateFlightFareLookup(req.body);
-    return sendSuccess(res, await revalidateFlightOffer(dto));
+    return sendSuccess(res, await revalidateFlightOffer(dto, { tenant: req.tenant }));
   }),
 );
 
@@ -81,7 +91,13 @@ router.post(
   '/checkout',
   asyncHandler(async (req, res) => {
     const dto = validateCheckoutBody(req.body);
-    return sendSuccess(res, await checkoutFlight(dto));
+    return sendSuccess(
+      res,
+      await checkoutFlight(dto, {
+        tenant: req.tenant,
+        requestId: req.requestId,
+      }),
+    );
   }),
 );
 
@@ -90,7 +106,13 @@ router.post(
   requireLogin,
   asyncHandler(async (req, res) => {
     const dto = validateBookBody(req.body);
-    return sendSuccess(res, await bookFlight(dto, req.user));
+    return sendSuccess(
+      res,
+      await bookFlight(dto, req.user, {
+        tenant: req.tenant,
+        requestId: req.requestId,
+      }),
+    );
   }),
 );
 
@@ -98,7 +120,10 @@ router.get(
   '/bookings',
   requireLogin,
   asyncHandler(async (req, res) => {
-    return sendSuccess(res, await listFlightBookings(req.user._id));
+    return sendSuccess(
+      res,
+      await listFlightBookings(req.user._id, { tenant: req.tenant }),
+    );
   }),
 );
 
@@ -106,7 +131,10 @@ router.post(
   '/bookings/details',
   requireLogin,
   asyncHandler(async (req, res) => {
-    return sendSuccess(res, await getFlightBookingDetails(req.body || {}, req.user));
+    return sendSuccess(
+      res,
+      await getFlightBookingDetails(req.body || {}, req.user, { tenant: req.tenant }),
+    );
   }),
 );
 
@@ -114,7 +142,13 @@ router.post(
   '/bookings/cancel',
   requireLogin,
   asyncHandler(async (req, res) => {
-    return sendSuccess(res, await cancelFlightBooking(req.body || {}, req.user));
+    return sendSuccess(
+      res,
+      await cancelFlightBooking(req.body || {}, req.user, {
+        tenant: req.tenant,
+        requestId: req.requestId,
+      }),
+    );
   }),
 );
 

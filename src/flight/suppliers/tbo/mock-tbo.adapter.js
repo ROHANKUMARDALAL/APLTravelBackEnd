@@ -39,9 +39,14 @@ const mockTboFlightAdapter = {
       }
     }
 
+    const supplierRequest = {
+      environment: options.environment || 'TEST',
+      criteria,
+    };
     return {
       status: 'SUCCESS',
       durationMs: Date.now() - started,
+      supplierRequest,
       flights,
       rawPayload: { mock: true, supplier: 'TBO', flights },
     };

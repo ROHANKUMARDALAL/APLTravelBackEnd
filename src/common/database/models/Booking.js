@@ -48,7 +48,7 @@ const BookingSchema = new mongoose.Schema(
     aplBookingRef: { type: String, required: true, unique: true },
     productType: {
       type: String,
-      enum: ['FLIGHT', 'HOTEL'],
+      enum: ['FLIGHT', 'HOTEL', 'BUS', 'TRANSFER'],
       required: true,
     },
     status: {
@@ -66,8 +66,22 @@ const BookingSchema = new mongoose.Schema(
       ref: 'User',
       index: true,
     },
+    /**
+     * Trusted DSA owner for NEW tenant-aware bookings (Phase 9+).
+     * Optional — historical bookings have no dsaId; never backfilled automatically.
+     * Client must never choose this value.
+     */
+    dsaId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Dsa',
+      index: true,
+    },
+    /** Correlation id from the book/confirm request when available. */
+    requestId: { type: String, index: true },
     checkoutToken: { type: String, index: true },
     searchId: { type: String },
+    /** Immutable commercial snapshot copied from checkout (Phase 12). Legacy bookings may omit. */
+    commercialSnapshot: { type: mongoose.Schema.Types.Mixed },
     /** Local confirmation number claimed onto this customer, so a reload does not duplicate it. */
     clientReference: { type: String, sparse: true, unique: true },
     /** UTC instant used only to order bookings, newest first. */
@@ -89,36 +103,73 @@ const BookingSchema = new mongoose.Schema(
 
 BookingSchema.index({ productType: 1, createdAt: -1 });
 BookingSchema.index({ createdAt: -1 });
+BookingSchema.index({ dsaId: 1, createdAt: -1 });
 
+/**
+ * Payment transaction (Phase 13).
+ * Booking.status and payment.status are independent state machines.
+ * Never store CVV / full PAN / gateway secrets.
+ */
 const PaymentSchema = new mongoose.Schema(
   {
+    paymentRef: { type: String, unique: true, sparse: true, index: true },
     bookingId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Booking',
-      required: true,
       index: true,
     },
+    checkoutToken: { type: String, index: true },
+    dsaId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Dsa',
+      index: true,
+    },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+    requestId: { type: String, index: true },
+    idempotencyKey: { type: String, unique: true, sparse: true, index: true },
     status: {
       type: String,
       enum: [
+        'CREATED',
         'PENDING',
+        'SUCCESS',
+        'FAILED',
+        'CANCELLED',
+        'REFUND_PENDING',
+        'PARTIALLY_REFUNDED',
+        'REFUNDED',
+        // Legacy Phase 1–12 aliases (normalize to SUCCESS when reading).
         'AUTHORIZED',
         'CAPTURED',
-        'FAILED',
-        'REFUNDED',
-        'PARTIALLY_REFUNDED',
       ],
-      default: 'PENDING',
+      default: 'CREATED',
+      index: true,
     },
     amount: { type: Number, required: true },
     currency: { type: String, required: true },
-    provider: { type: String, default: 'APL_MOCK_PAY' },
-    providerRef: { type: String },
+    provider: { type: String, default: 'APL_MOCK_PAY', index: true },
+    providerRef: { type: String, index: true },
     method: { type: String },
     last4: { type: String },
+    failureReason: { type: String },
+    providerMeta: { type: mongoose.Schema.Types.Mixed, default: {} },
+    bookingConfirmStatus: {
+      type: String,
+      enum: ['NOT_STARTED', 'ATTEMPTED', 'CONFIRMED', 'FAILED'],
+      default: 'NOT_STARTED',
+    },
+    needsAttention: { type: Boolean, default: false, index: true },
   },
   { timestamps: true },
 );
+
+PaymentSchema.index({ dsaId: 1, createdAt: -1 });
+PaymentSchema.index({ bookingId: 1, createdAt: -1 });
+PaymentSchema.index({ checkoutToken: 1, status: 1 });
 
 module.exports = {
   Booking: mongoose.models.Booking || mongoose.model('Booking', BookingSchema),

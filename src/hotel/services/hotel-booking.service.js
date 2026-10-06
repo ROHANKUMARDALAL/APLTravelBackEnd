@@ -14,6 +14,10 @@ const {
   getBookingDetailsByProduct,
   cancelBooking,
 } = require('../../common/services/checkout-booking.service');
+const {
+  createPricingContext,
+  calculatePrice,
+} = require('../../pricing/services/pricing-engine.service');
 
 function quoteHotelPrice(dto, room) {
   const currency = room.price.currency;
@@ -33,16 +37,37 @@ function quoteHotelPrice(dto, room) {
   };
 }
 
-async function checkoutHotel(dto) {
-  const details = await getHotelDetails(dto);
-  await revalidateHotelOffer(dto);
+async function checkoutHotel(dto, context = {}) {
+  const details = await getHotelDetails(dto, context);
+  await revalidateHotelOffer(dto, context);
 
   const room = details.selectedRoom;
   if (!room) {
     throw AppError.validation('selectedRoom missing — pass aplRoomId');
   }
 
-  const quote = quoteHotelPrice(dto, room);
+  const pricingContext = await createPricingContext({
+    dsaId: context.tenant?.dsaId || null,
+    serviceCode: 'hotel',
+  });
+  const supplierPrice = room.supplierPrice || {
+    amount: Number(room.price?.amount) || 0,
+    currency: room.price?.currency || 'INR',
+  };
+  const priced = calculatePrice({
+    supplierPrice,
+    supplierCode: room.supplier || null,
+    context: pricingContext,
+    includeInternal: true,
+  });
+  const roomForQuote = {
+    ...room,
+    price: priced.customerPrice,
+    supplierPrice: priced.supplierPrice,
+    commercialSnapshot: priced.commercialSnapshot,
+  };
+
+  const quote = quoteHotelPrice(dto, roomForQuote);
   assertExactPrice(quote, dto.confirmPrice);
 
   return createCheckoutSession({
@@ -50,8 +75,15 @@ async function checkoutHotel(dto) {
     searchId: dto.searchId,
     aplOfferId: room.aplRoomId,
     aplEntityId: details.aplHotelId,
+    dsaId: context.tenant?.dsaId,
+    requestId: context.requestId,
     contact: dto.contact,
     travellers: dto.guests,
+    commercialSnapshot: {
+      ...priced.commercialSnapshot,
+      addonsAmount: quote.addonsAmount,
+      totalAmount: quote.amount,
+    },
     pricing: {
       amount: quote.amount,
       currency: quote.currency,
@@ -62,34 +94,49 @@ async function checkoutHotel(dto) {
       aplHotelId: details.aplHotelId,
       aplRoomId: room.aplRoomId,
       hotel: details.hotel,
-      selectedRoom: room,
+      selectedRoom: roomForQuote,
       policies: details.policies,
       addOns: quote.selectedAddOns,
+      supplier: room.supplier,
     },
   });
 }
 
-async function bookHotel(dto, user) {
-  return confirmBookingFromCheckout({ ...dto, user });
+async function bookHotel(dto, user, context = {}) {
+  return confirmBookingFromCheckout({
+    checkoutToken: dto.checkoutToken,
+    payment: dto.payment,
+    confirmPrice: dto.confirmPrice,
+    user,
+    tenant: context.tenant,
+    requestId: context.requestId,
+    idempotencyKey: dto.idempotencyKey || dto.payment?.idempotencyKey,
+    simulateBookingFailure: dto.simulateBookingFailure,
+  });
 }
 
-async function listHotelBookings(userId) {
-  return listBookingsByProduct('HOTEL', userId);
+async function listHotelBookings(userId, context = {}) {
+  return listBookingsByProduct('HOTEL', userId, { tenant: context.tenant });
 }
 
-async function getHotelBookingDetails(body, user) {
+async function getHotelBookingDetails(body, user, context = {}) {
   return getBookingDetailsByProduct({
     bookingId: body.bookingId || body.aplBookingRef,
     productType: 'HOTEL',
     userId: user._id,
+    tenant: context.tenant,
   });
 }
 
-async function cancelHotelBooking(body, user) {
+async function cancelHotelBooking(body, user, context = {}) {
   return cancelBooking({
     bookingId: body.bookingId || body.aplBookingRef,
     productType: 'HOTEL',
     userId: user._id,
+    tenant: context.tenant,
+    reason: body.reason,
+    requestId: context.requestId,
+    idempotencyKey: body.idempotencyKey,
   });
 }
 

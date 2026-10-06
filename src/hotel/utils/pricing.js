@@ -1,20 +1,24 @@
 'use strict';
 
-const { config } = require('../../common/config');
+const {
+  createPricingContext,
+  calculatePrice,
+} = require('../../pricing/services/pricing-engine.service');
 
-function applyMarkup(supplierPrice) {
-  const markupPercent = config.defaultMarkupPercent;
-  const customerAmount =
-    Math.round(supplierPrice.amount * (1 + markupPercent / 100) * 100) / 100;
-
-  return {
-    supplier: supplierPrice,
-    customer: {
-      amount: customerAmount,
-      currency: supplierPrice.currency,
+function applyMarkup(supplierPrice, pricingContext = null) {
+  const priced = calculatePrice({
+    supplierPrice,
+    context: pricingContext || {
+      rules: [],
+      at: new Date(),
+      pricingVersion: '12.0',
     },
-    markupPercent,
+  });
+  return {
+    supplier: priced.supplierPrice,
+    customer: priced.customerPrice,
+    commercialSnapshot: priced.commercialSnapshot,
   };
 }
 
-module.exports = { applyMarkup };
+module.exports = { applyMarkup, createPricingContext, calculatePrice };

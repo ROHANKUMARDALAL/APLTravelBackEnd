@@ -14,6 +14,11 @@ const {
   getBookingDetailsByProduct,
   cancelBooking,
 } = require('../../common/services/checkout-booking.service');
+const {
+  createPricingContext,
+  calculatePrice,
+} = require('../../pricing/services/pricing-engine.service');
+const { toMinor, toMajor } = require('../../pricing/money');
 
 const FARE_TIER_MULTIPLIERS = [1, 1.08, 1.18, 1.26];
 
@@ -118,14 +123,16 @@ function resolveUnitFareAmount(fare, dto) {
   return baseAmount;
 }
 
-function quoteFlightPrice(dto, fare) {
+function quoteFlightPrice(dto, fare, { lockUnit = false } = {}) {
   const currency = fare.price.currency;
   const catalog = flightAddOnCatalog(currency);
   const seats = sumSelected(catalog.seats, dto.addOns?.seats || [], 'seat');
   const baggage = sumSelected(catalog.baggage, dto.addOns?.baggage || [], 'baggage');
   const meals = sumSelected(catalog.meals, dto.addOns?.meals || [], 'meal');
   const payableTravellers = payingTravellerCount(dto.travellers);
-  const unitAmount = resolveUnitFareAmount(fare, dto);
+  const unitAmount = lockUnit
+    ? Number(fare.price.amount)
+    : resolveUnitFareAmount(fare, dto);
   const baseAmount = unitAmount * payableTravellers;
   const addonsAmount = seats.amount + baggage.amount + meals.amount;
   const selectedAddOns = [...seats.selected, ...baggage.selected, ...meals.selected];
@@ -140,20 +147,56 @@ function quoteFlightPrice(dto, fare) {
   };
 }
 
-async function checkoutFlight(dto) {
-  const details = await getFlightDetails(dto);
-  await revalidateFlightOffer(dto);
+async function checkoutFlight(dto, context = {}) {
+  const details = await getFlightDetails(dto, context);
+  await revalidateFlightOffer(dto, context);
 
   const fare = resolveSelectedFare(details, dto);
   if (!fare) {
     throw AppError.validation('selectedFlightFareData missing — pass aplFareId');
   }
 
-  const quote = quoteFlightPrice(dto, fare);
+  // Recalculate commercial layer from preserved supplier price (authoritative).
+  const pricingContext = await createPricingContext({
+    dsaId: context.tenant?.dsaId || null,
+    serviceCode: 'flight',
+  });
+  const supplierPrice = fare.supplierPrice || {
+    amount: Number(fare.price?.amount) || 0,
+    currency: fare.price?.currency || 'INR',
+  };
+  const priced = calculatePrice({
+    supplierPrice,
+    supplierCode: fare.supplier || null,
+    context: pricingContext,
+    includeInternal: true,
+  });
+  const familyTier = {
+    SAVER: 1,
+    PUBLISH: 1.08,
+    FLEXI: 1.18,
+    CORPORATE: 1.26,
+  };
+  const tierMult = familyTier[String(fare.fareType || '').toUpperCase()] || 1;
+  const engineUnit = toMajor(
+    Math.round(toMinor(priced.customerPrice.amount) * tierMult),
+  );
+  // Unit fare for checkout uses engine final (not client amount).
+  const fareForQuote = {
+    ...fare,
+    price: {
+      amount: engineUnit,
+      currency: priced.customerPrice.currency,
+    },
+    supplierPrice: priced.supplierPrice,
+    commercialSnapshot: priced.commercialSnapshot,
+  };
+
+  const quote = quoteFlightPrice(dto, fareForQuote, { lockUnit: true });
   assertExactPrice(quote, dto.confirmPrice);
 
   const selectedQuote = dto.selectedFareQuote || null;
-  const chargedUnitAmount = Number(quote.unitAmount) || Number(fare.price?.amount) || 0;
+  const chargedUnitAmount = Number(quote.unitAmount) || Number(fareForQuote.price?.amount) || 0;
   const fareLabel =
     selectedQuote?.label ||
     selectedQuote?.fareType ||
@@ -165,8 +208,17 @@ async function checkoutFlight(dto) {
     searchId: dto.searchId,
     aplOfferId: fare.aplFareId,
     aplEntityId: details.aplFlightId,
+    dsaId: context.tenant?.dsaId,
+    requestId: context.requestId,
     contact: dto.contact,
     travellers: dto.travellers,
+    commercialSnapshot: {
+      ...priced.commercialSnapshot,
+      unitAmount: chargedUnitAmount,
+      payableTravellers: quote.payableTravellers,
+      addonsAmount: quote.addonsAmount,
+      totalAmount: quote.amount,
+    },
     pricing: {
       amount: quote.amount,
       currency: quote.currency,
@@ -179,9 +231,8 @@ async function checkoutFlight(dto) {
       aplFlightId: details.aplFlightId,
       aplFareId: fare.aplFareId,
       flight: details.flight,
-      // Persist the charged family fare (not only the supplier base row).
       flightFareData: {
-        ...fare,
+        ...fareForQuote,
         fareType: String(fareLabel).toUpperCase(),
         price: {
           amount: chargedUnitAmount,
@@ -193,31 +244,46 @@ async function checkoutFlight(dto) {
       fareLabel,
       fareRules: details.fareRules,
       addOns: quote.selectedAddOns,
+      supplier: fare.supplier,
     },
   });
 }
 
-async function bookFlight(dto, user) {
-  return confirmBookingFromCheckout({ ...dto, user });
+async function bookFlight(dto, user, context = {}) {
+  return confirmBookingFromCheckout({
+    checkoutToken: dto.checkoutToken,
+    payment: dto.payment,
+    confirmPrice: dto.confirmPrice,
+    user,
+    tenant: context.tenant,
+    requestId: context.requestId,
+    idempotencyKey: dto.idempotencyKey || dto.payment?.idempotencyKey,
+    simulateBookingFailure: dto.simulateBookingFailure,
+  });
 }
 
-async function listFlightBookings(userId) {
-  return listBookingsByProduct('FLIGHT', userId);
+async function listFlightBookings(userId, context = {}) {
+  return listBookingsByProduct('FLIGHT', userId, { tenant: context.tenant });
 }
 
-async function getFlightBookingDetails(body, user) {
+async function getFlightBookingDetails(body, user, context = {}) {
   return getBookingDetailsByProduct({
     bookingId: body.bookingId || body.aplBookingRef,
     productType: 'FLIGHT',
     userId: user._id,
+    tenant: context.tenant,
   });
 }
 
-async function cancelFlightBooking(body, user) {
+async function cancelFlightBooking(body, user, context = {}) {
   return cancelBooking({
     bookingId: body.bookingId || body.aplBookingRef,
     productType: 'FLIGHT',
     userId: user._id,
+    tenant: context.tenant,
+    reason: body.reason,
+    requestId: context.requestId,
+    idempotencyKey: body.idempotencyKey,
   });
 }
 

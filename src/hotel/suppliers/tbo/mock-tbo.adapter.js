@@ -34,9 +34,14 @@ const mockTboAdapter = {
 
     const hotels = getMockTboHotels(criteria);
 
+    const supplierRequest = {
+      environment: options.environment || 'TEST',
+      criteria,
+    };
     return {
       status: 'SUCCESS',
       durationMs: Date.now() - started,
+      supplierRequest,
       hotels,
       rawPayload: { mock: true, supplier: 'TBO', hotels },
     };

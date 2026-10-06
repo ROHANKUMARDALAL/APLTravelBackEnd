@@ -12,17 +12,31 @@ const {
   errorHandler,
   notFoundHandler,
 } = require('./common/middleware/error-handler');
+const { UPLOAD_ROOT } = require('./common/media/storage');
 const healthRoutes = require('./health/routes/health.routes');
+const readyRoutes = require('./health/routes/ready.routes');
 const suppliersRoutes = require('./suppliers/routes/suppliers.routes');
 const hotelsRoutes = require('./hotel/routes/hotels.routes');
 const flightsRoutes = require('./flight/routes/flights.routes');
+const busesRoutes = require('./bus/routes/buses.routes');
+const transfersRoutes = require('./transfer/routes/transfers.routes');
 const bookingsRoutes = require('./booking/routes/bookings.routes');
 const authRoutes = require('./user/routes/auth.routes');
 const accountRoutes = require('./user/routes/account.routes');
 const travellersRoutes = require('./user/routes/travellers.routes');
+const aplAdminRoutes = require('./apl-admin/routes');
+const dsaAdminRoutes = require('./dsa-admin/routes');
+const publicSiteRoutes = require('./public-site/routes/site.routes');
 const { sendSuccess } = require('./common/response/envelope');
 
-function createApp() {
+/**
+ * @param {{ includeAdminNamespaces?: boolean }} [options]
+ * Production B2C (Phase 15G) does NOT mount /api/apl-admin or /api/dsa-admin.
+ * Integration tests that still exercise the former combined process may pass
+ * includeAdminNamespaces: true.
+ */
+function createApp(options = {}) {
+  const includeAdminNamespaces = options.includeAdminNamespaces === true;
   const app = express();
 
   app.disable('x-powered-by');
@@ -38,6 +52,11 @@ function createApp() {
     }),
   );
   app.use(express.json({ limit: '1mb' }));
+
+  // Probes must stay outside rate limiting and heavy request logging.
+  app.use('/health', healthRoutes);
+  app.use('/ready', readyRoutes);
+
   app.use(serviceLogMiddleware);
   app.use(
     rateLimit({
@@ -45,6 +64,10 @@ function createApp() {
       max: config.throttleLimit,
       standardHeaders: true,
       legacyHeaders: false,
+      skip: (req) => {
+        const path = req.path || '';
+        return path === '/health' || path === '/ready';
+      },
       message: {
         success: false,
         error: {
@@ -75,14 +98,32 @@ function createApp() {
     return sendSuccess(res, { service: 'apl-travel-backend', status: 'up' });
   });
 
-  app.use('/health', healthRoutes);
   app.use(`/${config.apiPrefix}/suppliers`, suppliersRoutes);
   app.use(`/${config.apiPrefix}/hotels`, hotelsRoutes);
   app.use(`/${config.apiPrefix}/flights`, flightsRoutes);
+  app.use(`/${config.apiPrefix}/buses`, busesRoutes);
+  app.use(`/${config.apiPrefix}/transfers`, transfersRoutes);
   app.use(`/${config.apiPrefix}/auth`, authRoutes);
   app.use(`/${config.apiPrefix}/account`, accountRoutes);
   app.use(`/${config.apiPrefix}/travellers`, travellersRoutes);
   app.use(`/${config.apiPrefix}/bookings`, bookingsRoutes);
+
+  // Local/dev media files (Phase 7). Production should use object storage behind the same /media URL shape.
+  app.use(
+    '/media',
+    express.static(UPLOAD_ROOT, {
+      fallthrough: false,
+      maxAge: '7d',
+      index: false,
+    }),
+  );
+
+  // Phase 15G: admin namespaces belong to APLAdminBackEnd :3005 and DSAAdminBackEnd :3004.
+  if (includeAdminNamespaces) {
+    app.use('/api/apl-admin', aplAdminRoutes);
+    app.use('/api/dsa-admin', dsaAdminRoutes);
+  }
+  app.use(`/${config.apiPrefix}/public`, publicSiteRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

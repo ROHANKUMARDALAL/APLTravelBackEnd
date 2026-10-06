@@ -6,8 +6,8 @@ const SupplierMappingSchema = new mongoose.Schema(
   {
     supplierCode: {
       type: String,
-      enum: ['TBO', 'TRIPJACK', 'KAFILA'],
       required: true,
+      uppercase: true,
       index: true,
     },
     entityType: { type: String, required: true, index: true },

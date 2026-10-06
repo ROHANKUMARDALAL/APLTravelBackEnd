@@ -5,6 +5,8 @@ const { asyncHandler } = require('../../common/middleware/error-handler');
 const { sendSuccess } = require('../../common/response/envelope');
 const { listSupplierMeta } = require('../../hotel/suppliers/registry');
 const { listFlightSupplierMeta } = require('../../flight/suppliers/registry');
+const { listBusSupplierMeta } = require('../../bus/suppliers/registry');
+const { listTransferSupplierMeta } = require('../../transfer/suppliers/registry');
 
 const router = express.Router();
 
@@ -15,6 +17,8 @@ router.get(
       suppliers: [
         ...listSupplierMeta().map((s) => ({ ...s, product: s.product || 'HOTEL' })),
         ...listFlightSupplierMeta(),
+        ...listBusSupplierMeta(),
+        ...listTransferSupplierMeta(),
       ],
     });
   }),

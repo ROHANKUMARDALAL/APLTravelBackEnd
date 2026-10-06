@@ -3,6 +3,7 @@
 const ErrorCode = {
   VALIDATION_ERROR: 'VALIDATION_ERROR',
   UNAUTHORIZED: 'UNAUTHORIZED',
+  FORBIDDEN: 'FORBIDDEN',
   NOT_FOUND: 'NOT_FOUND',
   RATE_LIMITED: 'RATE_LIMITED',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
@@ -36,6 +37,10 @@ class AppError extends Error {
 
   static unauthorized(message = 'Login token is required') {
     return new AppError(ErrorCode.UNAUTHORIZED, message, { httpStatus: 401 });
+  }
+
+  static forbidden(message = 'Permission denied') {
+    return new AppError(ErrorCode.FORBIDDEN, message, { httpStatus: 403 });
   }
 
   static internal(message, cause) {

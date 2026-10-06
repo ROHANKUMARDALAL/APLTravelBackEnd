@@ -1,16 +1,28 @@
 'use strict';
 
-const { config } = require('../../common/config');
+/**
+ * Legacy shim — Flight search now uses the Phase 12 pricing engine.
+ * Kept so old imports do not break; prefer calculatePrice().
+ */
+const {
+  createPricingContext,
+  calculatePrice,
+} = require('../../pricing/services/pricing-engine.service');
 
-function applyMarkup(supplierPrice) {
-  const markupPercent = config.defaultMarkupPercent;
-  const customerAmount =
-    Math.round(supplierPrice.amount * (1 + markupPercent / 100) * 100) / 100;
+function applyMarkup(supplierPrice, pricingContext = null) {
+  const priced = calculatePrice({
+    supplierPrice,
+    context: pricingContext || {
+      rules: [],
+      at: new Date(),
+      pricingVersion: '12.0',
+    },
+  });
   return {
-    supplier: supplierPrice,
-    customer: { amount: customerAmount, currency: supplierPrice.currency },
-    markupPercent,
+    supplier: priced.supplierPrice,
+    customer: priced.customerPrice,
+    commercialSnapshot: priced.commercialSnapshot,
   };
 }
 
-module.exports = { applyMarkup };
+module.exports = { applyMarkup, createPricingContext, calculatePrice };

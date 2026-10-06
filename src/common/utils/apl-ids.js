@@ -20,6 +20,22 @@ function formatAplRoomId(seq) {
   return `APL-ROOM-${padSeq(seq)}`;
 }
 
+function formatAplBusId(seq) {
+  return `APL-BUS-${padSeq(seq)}`;
+}
+
+function formatAplBusOfferId(seq) {
+  return `APL-BUSOFFER-${padSeq(seq)}`;
+}
+
+function formatAplTransferId(seq) {
+  return `APL-XFER-${padSeq(seq)}`;
+}
+
+function formatAplTransferOfferId(seq) {
+  return `APL-XFEROFFER-${padSeq(seq)}`;
+}
+
 function formatAplSearchId(token) {
   return `APL-SRCH-${token}`;
 }
@@ -42,6 +58,10 @@ module.exports = {
   formatAplFlightId,
   formatAplOfferId,
   formatAplRoomId,
+  formatAplBusId,
+  formatAplBusOfferId,
+  formatAplTransferId,
+  formatAplTransferOfferId,
   formatAplSearchId,
   formatAplBookingRef,
   stableSeqFromKey,

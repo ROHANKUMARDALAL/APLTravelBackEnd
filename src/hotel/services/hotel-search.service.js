@@ -7,14 +7,21 @@ const { formatAplSearchId } = require('../../common/utils/apl-ids');
 const { getAllAdapters } = require('../suppliers/registry');
 const { normalizeCandidate } = require('../utils/hotel-normalization');
 const { resolveHotels } = require('../utils/hotel-entity-resolution');
-const { consolidateOffers } = require('../utils/offer-consolidation');
+const { consolidateOffers, sanitizeHotelSearchForPublic } = require('../utils/offer-consolidation');
+const { createPricingContext } = require('../../pricing/services/pricing-engine.service');
 const Supplier = require('../../common/database/models/Supplier');
 const SupplierMapping = require('../../common/database/models/SupplierMapping');
-const SupplierRawPayload = require('../../common/database/models/SupplierRawPayload');
 const { logSupplierOutcomes } = require('../../common/services/service-log.service');
+const { writeLifecycleLog } = require('../../common/services/lifecycle-log.service');
+const {
+  buildSupplierExecutionPlan,
+} = require('../../suppliers/services/supplier-routing.service');
 const Hotel = require('../models/Hotel');
 const Search = require('../../common/database/models/Search');
 const { hotelExtraServices } = require('../data/extra-services');
+const {
+  assertSearchTenantMatch,
+} = require('../../tenant/services/transaction-tenant.service');
 
 function assertDateRange(checkIn, checkOut) {
   const inDate = new Date(checkIn);
@@ -64,6 +71,8 @@ async function persistSearchArtifacts({
     aplSearchId,
     type: 'HOTEL',
     status,
+    dsaId: context.dsaId || undefined,
+    requestId: context.requestId || undefined,
     request: criteria,
     results: {
       searchId: aplSearchId,
@@ -83,31 +92,33 @@ async function persistSearchArtifacts({
     expiresAt: new Date(Date.now() + 30 * 60 * 1000),
   });
 
-  for (const { adapter, outcome } of settled) {
-    const payload =
-      outcome.status === 'SUCCESS'
-        ? outcome.rawPayload
-        : {
-            errorCode: outcome.errorCode,
-            errorMessage: outcome.errorMessage,
-          };
-
-    await SupplierRawPayload.create({
-      supplierCode: adapter.code,
-      searchId: aplSearchId,
-      operation: 'HOTEL_SEARCH',
-      payload: payload || {},
-    });
-  }
-
   await logSupplierOutcomes({
     requestId: context.requestId,
+    dsaId: context.dsaId,
     userId: context.userId,
     service: 'HOTEL',
     operation: 'searchHotels',
     searchId: aplSearchId,
     userRequest: criteria,
     settled,
+  });
+
+  await writeLifecycleLog({
+    stage: 'NORMALIZED_RESPONSE',
+    direction: 'SUPPLIER',
+    requestId: context.requestId,
+    dsaId: context.dsaId,
+    userId: context.userId,
+    service: 'HOTEL',
+    operation: 'searchHotels',
+    searchId: aplSearchId,
+    status: status === 'COMPLETED' ? 'SUCCESS' : 'PARTIAL',
+    result: {
+      searchId: aplSearchId,
+      status,
+      hotelCount: hotels.length,
+      suppliers: supplierMeta,
+    },
   });
 
   for (const hotel of hotels) {
@@ -189,20 +200,66 @@ async function searchHotels(dto, forcedFailureList, context = {}) {
     crypto.randomBytes(4).toString('hex').toUpperCase(),
   );
   const forcedFailures = new Set(failureList);
-  const adapters = getAllAdapters();
+
+  await writeLifecycleLog({
+    stage: 'NORMALIZED_REQUEST',
+    direction: 'INBOUND',
+    requestId: context.requestId,
+    dsaId: context.dsaId,
+    userId: context.userId,
+    service: 'HOTEL',
+    operation: 'searchHotels',
+    searchId: aplSearchId,
+    status: 'SUCCESS',
+    request: criteria,
+  });
+
+  let plan;
+  if (context.dsaId) {
+    plan = await buildSupplierExecutionPlan({
+      dsaId: context.dsaId,
+      serviceCode: 'hotel',
+      operation: 'searchHotels',
+    });
+  } else {
+    plan = {
+      mode: 'LEGACY_MOCK_FANOUT',
+      reason: 'NO_TRANSACTION_TENANT',
+      strategy: 'PARALLEL',
+      suppliers: getAllAdapters().map((adapter, index) => ({
+        supplierCode: adapter.code,
+        priority: index + 1,
+        adapter,
+        supplierId: null,
+      })),
+    };
+  }
+
+  const adapterContext = {
+    requestId: context.requestId,
+    dsaId: context.dsaId,
+    service: 'HOTEL',
+    operation: 'searchHotels',
+    routingMode: plan.mode,
+    routingStrategy: plan.strategy,
+  };
 
   const settled = await Promise.all(
-    adapters.map(async (adapter) => {
+    plan.suppliers.map(async (entry) => {
+      const adapter = entry.adapter;
       try {
         const outcome = await adapter.searchHotels(criteria, {
           simulateFailure: forcedFailures.has(adapter.code),
+          ...adapterContext,
+          environment: entry.environment,
         });
-        return { adapter, outcome };
+        return { adapter, outcome, supplierId: entry.supplierId };
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown supplier error';
         console.error(`Supplier ${adapter.code} threw: ${message}`);
         return {
           adapter,
+          supplierId: entry.supplierId,
           outcome: {
             status: 'FAILED',
             durationMs: 0,
@@ -246,7 +303,11 @@ async function searchHotels(dto, forcedFailureList, context = {}) {
 
   const normalized = candidates.map((c) => normalizeCandidate(c));
   const clusters = resolveHotels(normalized);
-  const hotels = consolidateOffers(clusters).sort(
+  const pricingContext = await createPricingContext({
+    dsaId: context.dsaId || null,
+    serviceCode: 'hotel',
+  });
+  const hotels = consolidateOffers(clusters, pricingContext).sort(
     (a, b) => a.lowestPrice.amount - b.lowestPrice.amount,
   );
 
@@ -320,8 +381,11 @@ function findRoom(hotel, aplRoomId) {
   );
 }
 
-async function getHotelDetails({ searchId, aplHotelId, aplRoomId }) {
+async function getHotelDetails({ searchId, aplHotelId, aplRoomId }, context = {}) {
   const search = await getHotelSearchOrThrow(searchId);
+  if (context.tenant) {
+    assertSearchTenantMatch(search, context.tenant);
+  }
   const hotel = findHotel(search.results, aplHotelId);
   if (!hotel) throw AppError.notFound(`Hotel not found in search: ${aplHotelId}`);
 
@@ -362,13 +426,19 @@ async function getHotelDetails({ searchId, aplHotelId, aplRoomId }) {
   };
 }
 
-async function revalidateHotelOffer({ searchId, aplHotelId, aplRoomId }) {
+async function revalidateHotelOffer(
+  { searchId, aplHotelId, aplRoomId },
+  context = {},
+) {
   if (!aplRoomId) {
     throw AppError.validation(
       'aplRoomId is required for revalidate (select a room from availableRooms)',
     );
   }
-  const details = await getHotelDetails({ searchId, aplHotelId, aplRoomId });
+  const details = await getHotelDetails(
+    { searchId, aplHotelId, aplRoomId },
+    context,
+  );
   const room = details.selectedRoom;
   return {
     searchId,
@@ -384,4 +454,9 @@ async function revalidateHotelOffer({ searchId, aplHotelId, aplRoomId }) {
   };
 }
 
-module.exports = { searchHotels, getHotelDetails, revalidateHotelOffer };
+module.exports = {
+  searchHotels,
+  getHotelDetails,
+  revalidateHotelOffer,
+  sanitizeHotelSearchForPublic,
+};

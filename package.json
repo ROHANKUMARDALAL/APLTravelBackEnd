@@ -8,15 +8,38 @@
   "scripts": {
     "start": "node src/server.js",
     "start:dev": "node --watch src/server.js",
+    "dev:status": "node scripts/dev-status.js",
+    "wait:stack": "node scripts/wait-for-stack.js",
+    "smoke:travel": "node scripts/smoke-travel-search.js",
+    "test:ready": "node --test --test-reporter=spec src/health/**/*.test.js",
     "lint": "eslint \"src/**/*.js\"",
     "lint:check": "eslint \"src/**/*.js\"",
     "test": "node --test --test-reporter=spec src/**/*.test.js",
-    "typecheck": "node -e \"console.log('JS project — no TypeScript typecheck')\""
+    "typecheck": "node -e \"console.log('JS project — no TypeScript typecheck')\"",
+    "seed:services": "node scripts/seed-master-services.js",
+    "seed:roles": "node scripts/seed-admin-roles.js",
+    "seed:suppliers": "node scripts/seed-suppliers.js",
+    "bootstrap:apl-admin": "node scripts/bootstrap-apl-admin.js",
+    "bootstrap:dsa-admin": "node scripts/bootstrap-dsa-admin.js",
+    "test:tenant": "node --test --test-reporter=spec src/tenant/**/*.test.js",
+    "test:admin-auth": "node --test --test-reporter=spec src/admin-auth/**/*.test.js",
+    "test:apl-admin": "node --test --test-reporter=spec src/apl-admin/**/*.test.js",
+    "test:dsa-admin": "node --test --test-reporter=spec src/dsa-admin/**/*.test.js",
+    "test:cms": "node --test --test-reporter=spec src/cms/**/*.test.js",
+    "test:public-site": "node --test --test-reporter=spec src/public-site/**/*.test.js",
+    "test:transaction-tenancy": "node --test --test-reporter=spec src/tenant/services/transaction-tenant*.test.js src/tenant/services/transaction-tenancy.integration.test.js",
+    "test:pricing": "node --test --test-reporter=spec src/pricing/**/*.test.js src/pricing/*.test.js",
+    "test:payments": "node --test --test-reporter=spec src/payments/**/*.test.js src/payments/*.test.js",
+    "test:suppliers": "node --test --test-reporter=spec src/suppliers/runtime/runtime.test.js src/suppliers/supplier-platform.integration.test.js",
+    "test:bus": "node --test --test-reporter=spec src/bus/**/*.test.js",
+    "test:transfer": "node --test --test-reporter=spec src/transfer/**/*.test.js",
+    "test:shared-domain": "node --test --test-reporter=spec packages/shared-domain/test/**/*.test.js src/shared-domain/**/*.test.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@apl/shared-domain": "file:packages/shared-domain",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
@@ -24,6 +47,7 @@
     "helmet": "^8.1.0",
     "mongoose": "^8.18.1",
     "morgan": "^1.10.1",
+    "multer": "^2.4.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

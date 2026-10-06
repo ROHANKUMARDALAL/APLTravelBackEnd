@@ -1,0 +1,33 @@
+{
+  "name": "@apl/shared-domain",
+  "version": "1.0.0",
+  "description": "Canonical APL Travel shared domain contracts, enums, and pure rules for multi-backend readiness",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "index.js",
+    "constants",
+    "contracts",
+    "rules",
+    "security",
+    "tenant",
+    "models"
+  ],
+  "scripts": {
+    "test": "node --test --test-reporter=spec test/**/*.test.js"
+  },
+  "dependencies": {
+    "mongoose": "^8.18.1"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./models": "./models/index.js",
+    "./models/*": "./models/*.js",
+    "./constants": "./constants/index.js",
+    "./constants/*": "./constants/*.js"
+  }
+}

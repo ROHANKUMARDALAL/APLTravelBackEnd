@@ -293,7 +293,14 @@ function validateBookBody(body) {
       method: String(body.payment.method).toUpperCase(),
       cardNumber: body.payment.cardNumber,
       upiId: body.payment.upiId,
+      idempotencyKey: body.payment.idempotencyKey,
+      simulateBookingFailure: body.payment.simulateBookingFailure,
     },
+    idempotencyKey: body.idempotencyKey,
+    /** Dev/test only — never enable in production gateways. */
+    simulateBookingFailure:
+      body.simulateBookingFailure === true ||
+      String(body.simulateBookingFailure || '').toLowerCase() === 'true',
   };
 }
 

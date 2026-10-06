@@ -236,7 +236,13 @@ function validateHotelBookBody(body) {
       method: String(body.payment.method).toUpperCase(),
       cardNumber: body.payment.cardNumber,
       upiId: body.payment.upiId,
+      idempotencyKey: body.payment.idempotencyKey,
+      simulateBookingFailure: body.payment.simulateBookingFailure,
     },
+    idempotencyKey: body.idempotencyKey,
+    simulateBookingFailure:
+      body.simulateBookingFailure === true ||
+      String(body.simulateBookingFailure || '').toLowerCase() === 'true',
   };
 }
 

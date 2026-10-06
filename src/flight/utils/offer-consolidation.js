@@ -4,7 +4,8 @@ const {
   formatAplOfferId,
   stableSeqFromKey,
 } = require('../../common/utils/apl-ids');
-const { applyMarkup } = require('./pricing');
+const { calculatePrice } = require('../../pricing/services/pricing-engine.service');
+const { toMinor, toMajor } = require('../../pricing/money');
 const { getAirportMeta } = require('../data/airports');
 
 function airportBlock(code) {
@@ -40,7 +41,7 @@ function expandFareFamilies(flightFareData, aplFlightId) {
   if (!Number.isFinite(baseAmount) || baseAmount <= 0) return flightFareData;
 
   return FARE_FAMILY_TIERS.map((tier) => {
-    const amount = Math.round(baseAmount * tier.multiplier);
+    const amount = toMajor(Math.round(toMinor(baseAmount) * tier.multiplier));
     const fareKey = [
       aplFlightId,
       base.supplier || 'FAMILY',
@@ -49,6 +50,7 @@ function expandFareFamilies(flightFareData, aplFlightId) {
     ].join('|');
     return {
       ...base,
+      aplFlightId,
       aplFareId:
         tier.multiplier === 1
           ? base.aplFareId
@@ -61,11 +63,19 @@ function expandFareFamilies(flightFareData, aplFlightId) {
       },
       price: { amount, currency },
       familyOf: base.aplFareId,
+      // Preserve supplier commercial base for the Saver row only; tiers are display expansions.
+      supplierPrice: base.supplierPrice,
+      commercialSnapshot:
+        tier.multiplier === 1 ? base.commercialSnapshot : undefined,
     };
   });
 }
 
-function consolidateFlightOffers(clusters) {
+/**
+ * @param {object[]} clusters
+ * @param {object} [pricingContext] Phase 12 pricing context (optional → zero markup)
+ */
+function consolidateFlightOffers(clusters, pricingContext = null) {
   return clusters.map((cluster) => {
     const mappingsMap = new Map();
     const flightFareData = [];
@@ -76,7 +86,19 @@ function consolidateFlightOffers(clusters) {
         supplierFlightId: member.supplierFlightId,
       });
 
-      const priced = applyMarkup(member.supplierPrice);
+      const priced = calculatePrice({
+        supplierPrice: member.supplierPrice,
+        supplierCode: member.supplier,
+        context: pricingContext || {
+          rules: [],
+          serviceCode: 'flight',
+          dsaId: null,
+          at: new Date(),
+          pricingVersion: '12.0',
+        },
+        includeInternal: true,
+      });
+
       const fareKey = [
         cluster.aplFlightId,
         member.supplier,
@@ -90,12 +112,14 @@ function consolidateFlightOffers(clusters) {
         refundable: member.refundable,
         baggage: member.baggage,
         seatsLeft: member.seatsLeft,
-        price: priced.customer,
+        price: priced.customerPrice,
         supplier: member.supplier,
         supplierOfferId: member.supplierOfferId,
         supplierFlightId: member.supplierFlightId,
         supplierReference: member.supplierReference,
-        supplierPrice: priced.supplier,
+        /** Internal — stripped from public API responses */
+        supplierPrice: priced.supplierPrice,
+        commercialSnapshot: priced.commercialSnapshot,
       });
     }
 
@@ -145,4 +169,26 @@ function consolidateFlightOffers(clusters) {
   });
 }
 
-module.exports = { consolidateFlightOffers, expandFareFamilies };
+function sanitizeFlightSearchForPublic(payload) {
+  if (!payload || !Array.isArray(payload.flights)) return payload;
+  return {
+    ...payload,
+    flights: payload.flights.map((flight) => ({
+      ...flight,
+      flightFareData: (flight.flightFareData || []).map((fare) => {
+        const {
+          supplierPrice: _sp,
+          commercialSnapshot: _cs,
+          ...publicFare
+        } = fare;
+        return publicFare;
+      }),
+    })),
+  };
+}
+
+module.exports = {
+  consolidateFlightOffers,
+  expandFareFamilies,
+  sanitizeFlightSearchForPublic,
+};

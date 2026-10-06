@@ -63,7 +63,8 @@ Server: `http://localhost:3000`
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/health` | Includes MongoDB connectivity |
+| GET | `/health` | Liveness — process up (no Mongo required) |
+| GET | `/ready` | Readiness — Mongo + init + listening (`503` when not ready) |
 | GET | `/api/v1/suppliers` | Hotel + flight mock suppliers |
 | POST | `/api/v1/flights/search` | Aggregate + dedupe |
 | POST | `/api/v1/flights/details` | Offer details |
@@ -130,6 +131,9 @@ Expect Novotel Aerocity (three supplier variants) as **one** `aplHotelId` with s
 | Script | Purpose |
 |--------|---------|
 | `npm run start:dev` | Watch mode (`node --watch`) |
+| `npm run wait:stack` | Wait for Backend `/ready` + B2C/DSAAdmin/APLAdmin |
+| `npm run dev:status` | Report liveness/readiness classification |
+| `npm run smoke:travel` | Readiness-aware Flight/Hotel/Bus/Transfer smoke |
 | `npm start` | Production start |
 | `npm test` | Entity-resolution tests |
 | `npm run lint:check` | ESLint |

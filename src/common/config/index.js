@@ -54,6 +54,15 @@ function loadConfig() {
     .map((s) => s.trim().toUpperCase())
     .filter((s) => SUPPLIER_CODES.includes(s));
 
+  const { parseDevHostMap, normalizeHost } = require('../../public-site/utils/host');
+  const publicTenantBaseDomain = normalizeHost(
+    process.env.PUBLIC_TENANT_BASE_DOMAIN || '',
+  );
+  const publicDevHostMap =
+    nodeEnv === 'production'
+      ? new Map()
+      : parseDevHostMap(process.env.PUBLIC_DEV_HOST_MAP || '');
+
   return {
     nodeEnv,
     isProduction: nodeEnv === 'production',
@@ -65,6 +74,17 @@ function loadConfig() {
     throttleLimit: asNumber(process.env.THROTTLE_LIMIT, 120),
     defaultMarkupPercent: markup,
     mockSupplierFailures,
+    /** e.g. example.com → tenant resolves as {subdomain}.example.com */
+    publicTenantBaseDomain,
+    /** Dev-only host→DSA code map; always empty in production. */
+    publicDevHostMap,
+    /** Default HTTP timeout for real supplier calls (Phase 11A). */
+    supplierHttpTimeoutMs: asNumber(process.env.SUPPLIER_HTTP_TIMEOUT_MS, 15_000),
+    /**
+     * Legacy per-code env placeholders (Phase 11 TEST). Prefer
+     * SUPPLIER_{CODE}_{ENV}_* via credential-resolver.
+     * Values must never be returned by admin APIs or written to logs.
+     */
     suppliers: {
       tbo: {
         apiUrl: process.env.TBO_API_URL || '',
