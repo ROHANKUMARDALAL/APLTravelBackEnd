@@ -3,6 +3,7 @@
 const express = require('express');
 const { asyncHandler } = require('../../common/middleware/error-handler');
 const { sendSuccess } = require('../../common/response/envelope');
+const { logPublicSearchResult } = require('../../common/services/lifecycle-log.service');
 const {
   requireLogin,
   optionalLogin,
@@ -64,7 +65,16 @@ router.post(
         tenant: req.tenant,
       },
     );
-    return sendSuccess(res, sanitizeTransferSearchForPublic(result));
+    const publicResult = sanitizeTransferSearchForPublic(result);
+    await logPublicSearchResult({
+      requestId: req.requestId,
+      dsaId: req.tenant?.dsaId,
+      userId: req.user?._id,
+      service: 'TRANSFER',
+      searchId: result.searchId,
+      payload: publicResult,
+    });
+    return sendSuccess(res, publicResult);
   }),
 );
 
@@ -96,6 +106,7 @@ router.post(
       await checkoutTransfer(dto, {
         tenant: req.tenant,
         requestId: req.requestId,
+        couponCode: req.body?.couponCode,
       }),
     );
   }),

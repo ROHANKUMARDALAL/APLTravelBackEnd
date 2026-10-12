@@ -18,7 +18,51 @@ const {
 const router = express.Router();
 
 // Phase 9: booking ops resolve trusted website tenant (legacy bookings without dsaId still readable).
-router.use(requireTransactionTenant);
+router.post(
+  '/coupon-check',
+  requireTransactionTenant,
+  asyncHandler(async (req, res) => {
+    const { loadEngineCoupon, quoteStoredCoupon } = require('../../pricing/services/coupon.service');
+    const serviceCode = String(req.body?.serviceCode || '').toLowerCase();
+    const customerId = req.user?._id;
+    if (req.body?.searchId) {
+      const quoted = await quoteStoredCoupon({
+        dsaId: req.tenant?.dsaId,
+        serviceCode,
+        code: req.body?.code,
+        customerId,
+        searchId: req.body.searchId,
+        offerId: req.body.offerId,
+      });
+      return sendSuccess(res, {
+        coupon: {
+          code: quoted.coupon.code,
+          name: quoted.coupon.name,
+          adjustmentType: quoted.coupon.adjustmentType,
+          value: quoted.coupon.value,
+          maxAmount: quoted.coupon.maxAmount ?? null,
+        },
+        quote: quoted.breakdown,
+      });
+    }
+    const loaded = await loadEngineCoupon({
+      dsaId: req.tenant?.dsaId,
+      serviceCode,
+      code: req.body?.code,
+      customerId,
+    });
+    return sendSuccess(res, {
+      coupon: {
+        code: loaded.coupon.code,
+        name: loaded.coupon.name,
+        adjustmentType: loaded.coupon.adjustmentType,
+        value: loaded.coupon.value,
+        maxAmount: loaded.coupon.maxAmount,
+        exclusive: loaded.coupon.exclusive,
+      },
+    });
+  }),
+);
 
 router.get(
   '/',

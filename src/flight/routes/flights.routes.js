@@ -3,6 +3,7 @@
 const express = require('express');
 const { asyncHandler } = require('../../common/middleware/error-handler');
 const { sendSuccess } = require('../../common/response/envelope');
+const { logPublicSearchResult } = require('../../common/services/lifecycle-log.service');
 const { requireLogin, optionalLogin } = require('../../common/middleware/require-login');
 const {
   requireTransactionTenant,
@@ -67,7 +68,16 @@ router.post(
       dsaId: req.tenant?.dsaId,
       tenant: req.tenant,
     });
-    return sendSuccess(res, sanitizeFlightSearchForPublic(result));
+    const publicResult = sanitizeFlightSearchForPublic(result);
+    await logPublicSearchResult({
+      requestId: req.requestId,
+      dsaId: req.tenant?.dsaId,
+      userId: req.user?._id,
+      service: 'FLIGHT',
+      searchId: result.searchId,
+      payload: publicResult,
+    });
+    return sendSuccess(res, publicResult);
   }),
 );
 
@@ -89,6 +99,7 @@ router.post(
 
 router.post(
   '/checkout',
+  optionalLogin,
   asyncHandler(async (req, res) => {
     const dto = validateCheckoutBody(req.body);
     return sendSuccess(
@@ -96,6 +107,8 @@ router.post(
       await checkoutFlight(dto, {
         tenant: req.tenant,
         requestId: req.requestId,
+        userId: req.user?._id || null,
+        couponCode: req.body?.couponCode,
       }),
     );
   }),

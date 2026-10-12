@@ -846,32 +846,18 @@ async function latestPaymentsFor(bookings) {
 
 async function listBookingsForCustomer(user, options = {}) {
   const customerId = String(user._id);
-  if (user.email) {
+  if (user.email && options.tenant?.dsaId) {
     await Booking.updateMany(
       {
         guestEmail: String(user.email).toLowerCase(),
+        dsaId: options.tenant.dsaId,
         $or: [{ userId: { $exists: false } }, { userId: null }],
       },
       { $set: { userId: user._id, customerProfileId: customerId } },
     );
   }
-  const ownership = {
-    $or: [{ userId: user._id }, { customerProfileId: customerId }],
-  };
-  const filter = { ...ownership };
-  if (options.tenant?.dsaId) {
-    filter.$and = [
-      ownership,
-      {
-        $or: [
-          { dsaId: options.tenant.dsaId },
-          { dsaId: null },
-          { dsaId: { $exists: false } },
-        ],
-      },
-    ];
-    delete filter.$or;
-  }
+  const filter = { userId: user._id };
+  if (options.tenant?.dsaId) filter.dsaId = options.tenant.dsaId;
   const bookings = await Booking.find(filter)
     .sort({ createdAt: -1 })
     .limit(100);
@@ -900,11 +886,7 @@ async function listBookingsForCustomer(user, options = {}) {
 
 async function listBookingsByProduct(productType, userId, options = {}) {
   const filter = { productType, userId };
-  // Under a DSA website: show this tenant's bookings + legacy (no dsaId).
-  // Never return another DSA's tenant bookings to this host.
-  if (options.tenant?.dsaId) {
-    filter.$or = [{ dsaId: options.tenant.dsaId }, { dsaId: null }, { dsaId: { $exists: false } }];
-  }
+  if (options.tenant?.dsaId) filter.dsaId = options.tenant.dsaId;
   const bookings = await Booking.find(filter).sort({ createdAt: -1 }).limit(100);
   const payments = await latestPaymentsFor(bookings);
   return {

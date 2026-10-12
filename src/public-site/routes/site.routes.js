@@ -7,6 +7,7 @@ const {
   listBlogs,
   getBlog,
   getPage,
+  listPopularRoutes,
 } = require('../controllers/site.controller');
 
 const router = express.Router();
@@ -17,6 +18,7 @@ const router = express.Router();
  * Client-supplied dsaId is never trusted.
  */
 router.get('/site/config', asyncHandler(getSiteConfig));
+router.get('/popular-routes', asyncHandler(listPopularRoutes));
 // Backward-compatible alias used during Phase 7 stub era.
 router.get('/site', asyncHandler(getSiteConfig));
 

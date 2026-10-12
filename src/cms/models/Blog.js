@@ -17,6 +17,15 @@ const BlogSchema = new mongoose.Schema(
     shortDescription: { type: String, trim: true, default: '', maxlength: 500 },
     content: { type: String, trim: true, default: '', maxlength: 100000 },
     featuredImageUrl: { type: String, trim: true, default: '', maxlength: 500 },
+    images: {
+      type: [{
+        url: { type: String, trim: true, maxlength: 500 },
+        alt: { type: String, trim: true, default: '', maxlength: 160 },
+        caption: { type: String, trim: true, default: '', maxlength: 200 },
+        cover: { type: Boolean, default: false },
+      }],
+      default: [],
+    },
     seoTitle: { type: String, trim: true, default: '', maxlength: 160 },
     seoDescription: { type: String, trim: true, default: '', maxlength: 320 },
     status: {

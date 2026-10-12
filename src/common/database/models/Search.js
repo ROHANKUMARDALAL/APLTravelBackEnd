@@ -41,6 +41,12 @@ const SearchSchema = new mongoose.Schema(
       ref: 'Dsa',
       index: true,
     },
+    /** Logged-in customer when the search was made on a tenant site. */
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
     requestId: { type: String, index: true },
     request: { type: mongoose.Schema.Types.Mixed, required: true },
     /** Cached canonical results for details / revalidate / checkout. */

@@ -219,4 +219,204 @@ describe('Phase 12 pricing engine', () => {
     });
     assert.equal(out.customerPrice.amount, 1000);
   });
+
+  it('coupon applies only inside DSA margin after markup and discount', () => {
+    const out = calculatePrice({
+      supplierPrice: { amount: 1000, currency: 'INR' },
+      context: {
+        at: new Date(),
+        dsaId: 'dsa1',
+        serviceCode: 'flight',
+        coupon: { code: 'SAVE50', adjustmentType: 'FIXED', value: 50, currency: 'INR' },
+        rules: [
+          rule({ ruleKind: RULE_KINDS.DSA_MARKUP, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 150, currency: 'INR' }),
+          rule({ _id: 'd1', ruleKind: RULE_KINDS.DISCOUNT, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 100, currency: 'INR' }),
+        ],
+      },
+    });
+    assert.equal(out.commercialSnapshot.dsaMarkup.amount, 150);
+    assert.equal(out.commercialSnapshot.discount.amount, 100);
+    assert.equal(out.commercialSnapshot.coupon.amount, 50);
+    assert.equal(out.commercialSnapshot.coupon.status, 'APPLIED');
+    assert.equal(out.customerPrice.amount, 1000);
+  });
+
+  it('exclusive coupon does not stack with an automatic discount', () => {
+    const out = calculatePrice({
+      supplierPrice: { amount: 1000, currency: 'INR' },
+      context: {
+        at: new Date(),
+        dsaId: 'dsa1',
+        coupon: { code: 'ONLY', exclusive: true, adjustmentType: 'FIXED', value: 50, currency: 'INR' },
+        rules: [
+          rule({ ruleKind: RULE_KINDS.DSA_MARKUP, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 150, currency: 'INR' }),
+          rule({ _id: 'd1', ruleKind: RULE_KINDS.DISCOUNT, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 100, currency: 'INR' }),
+        ],
+      },
+    });
+    assert.equal(out.commercialSnapshot.coupon.amount, 0);
+    assert.equal(out.commercialSnapshot.coupon.status, 'COUPON_CANNOT_COMBINE');
+    assert.equal(out.customerPrice.amount, 1050);
+  });
+
+  it('coupon cannot reduce the price below supplier plus APL markup', () => {
+    const out = calculatePrice({
+      supplierPrice: { amount: 1000, currency: 'INR' },
+      context: {
+        at: new Date(),
+        dsaId: 'dsa1',
+        coupon: { code: 'BIG', adjustmentType: 'FIXED', value: 500, currency: 'INR' },
+        rules: [
+          rule({ ruleKind: RULE_KINDS.APL_MARKUP, adjustmentType: 'FIXED', value: 20, currency: 'INR' }),
+          rule({ _id: 'm1', ruleKind: RULE_KINDS.DSA_MARKUP, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 150, currency: 'INR' }),
+        ],
+      },
+    });
+    assert.equal(out.commercialSnapshot.coupon.amount, 150);
+    assert.equal(out.customerPrice.amount, 1020);
+  });
+
+  it('percentage discount is the percent of the supplier fare when margin allows', () => {
+    const out = calculatePrice({
+      supplierPrice: { amount: 2000, currency: 'INR' },
+      context: {
+        at: new Date(),
+        dsaId: 'dsa1',
+        rules: [
+          rule({ ruleKind: RULE_KINDS.DSA_MARKUP, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 500, currency: 'INR' }),
+          rule({ _id: 'pct', ruleKind: RULE_KINDS.DISCOUNT, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'PERCENTAGE', value: 10 }),
+        ],
+      },
+    });
+    assert.equal(out.commercialSnapshot.discount.amount, 200);
+    assert.equal(out.customerPrice.amount, 2300);
+  });
+
+  it('fixed markup stays inside a percentage ceiling using the supplier fare', () => {
+    const within = calculatePrice({
+      supplierPrice: { amount: 2000, currency: 'INR' },
+      context: {
+        dsaId: 'dsa1',
+        serviceCode: 'flight',
+        at: new Date(),
+        rules: [
+          rule({ ruleKind: RULE_KINDS.DSA_MARKUP_CEILING, adjustmentType: 'PERCENTAGE', value: 5 }),
+          rule({ _id: 'dsa', ruleKind: RULE_KINDS.DSA_MARKUP, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 100, currency: 'INR' }),
+        ],
+      },
+    });
+    assert.equal(within.commercialSnapshot.dsaMarkup.amount, 100);
+    assert.equal(within.commercialSnapshot.ceilingBlocked, false);
+    const over = calculatePrice({
+      supplierPrice: { amount: 2000, currency: 'INR' },
+      context: {
+        dsaId: 'dsa1',
+        serviceCode: 'flight',
+        at: new Date(),
+        rules: [
+          rule({ ruleKind: RULE_KINDS.DSA_MARKUP_CEILING, adjustmentType: 'PERCENTAGE', value: 5 }),
+          rule({ _id: 'dsa', ruleKind: RULE_KINDS.DSA_MARKUP, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 150, currency: 'INR' }),
+        ],
+      },
+    });
+    assert.equal(over.commercialSnapshot.dsaMarkup.amount, 0);
+    assert.equal(over.commercialSnapshot.ceilingBlocked, true);
+  });
+});
+
+describe('Phase 16J maximum discount', () => {
+  const headroom = rule({
+    ruleKind: RULE_KINDS.DSA_MARKUP,
+    ownerScope: 'DSA',
+    dsaId: 'dsa1',
+    adjustmentType: 'FIXED',
+    value: 20000,
+    currency: 'INR',
+  });
+
+  function price(amount, extraRules, coupon) {
+    return calculatePrice({
+      supplierPrice: { amount, currency: 'INR' },
+      context: {
+        dsaId: 'dsa1',
+        serviceCode: 'flight',
+        at: new Date(),
+        rules: [headroom, ...extraRules],
+        coupon,
+      },
+    });
+  }
+
+  it('keeps 5 percent of 1980 when the maximum is 100', () => {
+    const out = price(1980, [
+      rule({ ruleKind: RULE_KINDS.DISCOUNT, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'PERCENTAGE', value: 5, maxAmount: 100 }),
+    ]);
+    assert.equal(out.commercialSnapshot.discount.amount, 99);
+    assert.equal(out.commercialSnapshot.discount.cappedByMaximum, false);
+  });
+
+  it('caps 5 percent of 2020 at 100', () => {
+    const out = price(2020, [
+      rule({ ruleKind: RULE_KINDS.DISCOUNT, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'PERCENTAGE', value: 5, maxAmount: 100 }),
+    ]);
+    assert.equal(out.commercialSnapshot.discount.amount, 100);
+    assert.equal(out.commercialSnapshot.discount.cappedByMaximum, true);
+  });
+
+  it('caps a 10 percent coupon of 100000 at 500', () => {
+    const out = price(100000, [], {
+      code: 'SAVE10',
+      adjustmentType: 'PERCENTAGE',
+      value: 10,
+      maxAmount: 500,
+    });
+    assert.equal(out.commercialSnapshot.coupon.amount, 500);
+    assert.equal(out.commercialSnapshot.coupon.maxAmount, 500);
+    assert.equal(out.commercialSnapshot.discount.amount, 0);
+  });
+
+  it('leaves a fixed discount unchanged when a maximum is stored', () => {
+    const out = price(2000, [
+      rule({ ruleKind: RULE_KINDS.DISCOUNT, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 200, currency: 'INR', maxAmount: 50 }),
+    ]);
+    assert.equal(out.commercialSnapshot.discount.amount, 200);
+    assert.equal(out.commercialSnapshot.discount.cappedByMaximum, false);
+  });
+
+  it('does not treat a missing maximum as zero', () => {
+    const out = price(1980, [
+      rule({ ruleKind: RULE_KINDS.DISCOUNT, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'PERCENTAGE', value: 5, maxAmount: null }),
+    ]);
+    assert.equal(out.commercialSnapshot.discount.amount, 99);
+  });
+
+  it('applies the automatic cap and the coupon cap separately', () => {
+    const out = price(2020, [
+      rule({ ruleKind: RULE_KINDS.DISCOUNT, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'PERCENTAGE', value: 5, maxAmount: 100 }),
+    ], {
+      code: 'TEN',
+      adjustmentType: 'PERCENTAGE',
+      value: 10,
+      maxAmount: 500,
+    });
+    assert.equal(out.commercialSnapshot.discount.amount, 100);
+    assert.equal(out.commercialSnapshot.coupon.amount, 202);
+  });
+
+  it('still respects the DSA margin floor after the maximum', () => {
+    const out = calculatePrice({
+      supplierPrice: { amount: 1980, currency: 'INR' },
+      context: {
+        dsaId: 'dsa1',
+        serviceCode: 'flight',
+        at: new Date(),
+        rules: [
+          rule({ ruleKind: RULE_KINDS.DSA_MARKUP, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'FIXED', value: 50, currency: 'INR' }),
+          rule({ ruleKind: RULE_KINDS.DISCOUNT, ownerScope: 'DSA', dsaId: 'dsa1', adjustmentType: 'PERCENTAGE', value: 5, maxAmount: 100 }),
+        ],
+      },
+    });
+    assert.equal(out.commercialSnapshot.discount.amount, 50);
+    assert.equal(out.commercialSnapshot.discount.capped, true);
+  });
 });

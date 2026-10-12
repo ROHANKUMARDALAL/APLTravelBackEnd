@@ -50,6 +50,16 @@ async function checkoutHotel(dto, context = {}) {
     dsaId: context.tenant?.dsaId || null,
     serviceCode: 'hotel',
   });
+  if (context.couponCode) {
+    const { loadEngineCoupon } = require('../../pricing/services/coupon.service');
+    const loaded = await loadEngineCoupon({
+      dsaId: context.tenant?.dsaId,
+      serviceCode: 'hotel',
+      code: context.couponCode,
+      customerId: context.userId,
+    });
+    pricingContext.coupon = loaded.input;
+  }
   const supplierPrice = room.supplierPrice || {
     amount: Number(room.price?.amount) || 0,
     currency: room.price?.currency || 'INR',

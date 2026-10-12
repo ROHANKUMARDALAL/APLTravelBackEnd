@@ -7,6 +7,7 @@ const {
 const { calculatePrice } = require('../../pricing/services/pricing-engine.service');
 const { toMinor, toMajor } = require('../../pricing/money');
 const { getAirportMeta } = require('../data/airports');
+const { displayFlightNumber, segmentDisplay } = require('./flight-normalization');
 
 function airportBlock(code) {
   const meta = getAirportMeta(code);
@@ -89,6 +90,7 @@ function consolidateFlightOffers(clusters, pricingContext = null) {
       const priced = calculatePrice({
         supplierPrice: member.supplierPrice,
         supplierCode: member.supplier,
+        airlineCode: cluster.canonical?.airlineCode || null,
         context: pricingContext || {
           rules: [],
           serviceCode: 'flight',
@@ -113,6 +115,17 @@ function consolidateFlightOffers(clusters, pricingContext = null) {
         baggage: member.baggage,
         seatsLeft: member.seatsLeft,
         price: priced.customerPrice,
+        savings:
+          priced.commercialSnapshot.discount?.amount > 0
+            ? {
+                amount: priced.commercialSnapshot.discount.amount,
+                currency: priced.commercialSnapshot.discount.currency,
+                adjustmentType: priced.commercialSnapshot.discount.adjustmentType,
+                value: priced.commercialSnapshot.discount.value,
+                capped: priced.commercialSnapshot.discount.capped,
+                maxAmount: priced.commercialSnapshot.discount.maxAmount ?? null,
+              }
+            : null,
         supplier: member.supplier,
         supplierOfferId: member.supplierOfferId,
         supplierFlightId: member.supplierFlightId,
@@ -139,15 +152,20 @@ function consolidateFlightOffers(clusters, pricingContext = null) {
         name: c.airlineName,
       },
       flightNumber: `${c.airlineCode}${c.flightNumber}`,
+      displayFlightNumber: displayFlightNumber(c.airlineCode, c.flightNumber),
       cabinClass: c.cabinClass,
       durationMinutes: c.segments.reduce(
         (sum, s) => sum + (s.durationMinutes || 0),
         0,
       ),
-      segments: c.segments.map((s) => ({
-        ...s,
-        originAirport: airportBlock(s.origin),
-        destinationAirport: airportBlock(s.destination),
+      segments: c.segments.map((segment) => ({
+        ...segment,
+        airlineCode: segment.airlineCode || segment.marketingCarrier || (c.segments.length === 1 ? c.airlineCode : segment.airlineCode),
+        displayFlightNumber: segmentDisplay(segment, c, c.segments.length),
+        marketingCarrier: segment.marketingCarrier || segment.airlineCode || (c.segments.length === 1 ? c.airlineCode : undefined),
+        operatingCarrier: segment.operatingCarrier || segment.operatingAirlineCode || undefined,
+        originAirport: airportBlock(segment.origin),
+        destinationAirport: airportBlock(segment.destination),
       })),
       departure: {
         airport: firstSeg.origin,

@@ -7,6 +7,7 @@ const {
   normalizeHost,
   parseDevHostMap,
   isLocalHost,
+  developmentSubdomain,
 } = require('../utils/host');
 
 /** Local hosts often include :port; stored Dsa.domain may omit it. */
@@ -39,28 +40,56 @@ function extractRequestHost(req) {
   return normalizeHost(hostHeader);
 }
 
-async function findActiveDsaByDomain(domain) {
-  if (!domain) return null;
-  return Dsa.findOne({
-    domain,
-    status: 'ACTIVE',
-  }).lean();
-}
-
-async function findActiveDsaBySubdomain(subdomain) {
-  if (!subdomain) return null;
-  return Dsa.findOne({
-    subdomain,
-    status: 'ACTIVE',
-  }).lean();
-}
-
-async function findActiveDsaByCode(dsaCode) {
+async function findDsaByCode(dsaCode) {
   if (!dsaCode) return null;
   return Dsa.findOne({
     dsaCode: String(dsaCode).toUpperCase(),
-    status: 'ACTIVE',
   }).lean();
+}
+
+function subdomainFromHost(host) {
+  const fromLocal = developmentSubdomain(host);
+  if (fromLocal) return fromLocal;
+  const hostNoPort = host.includes(':') ? host.split(':')[0] : host;
+  if (hostNoPort === 'localhost' || hostNoPort === '127.0.0.1' || hostNoPort === '::1') {
+    return '';
+  }
+  const base = config.publicTenantBaseDomain;
+  if (base && hostNoPort.endsWith(`.${base}`)) {
+    const sub = hostNoPort.slice(0, -(base.length + 1));
+    if (sub && !sub.includes('.')) return sub;
+  }
+  if (!hostNoPort.includes('.')) return hostNoPort;
+  return '';
+}
+
+async function findDsaForHost(host) {
+  for (const candidate of domainLookupCandidates(host)) {
+    const byDomain = await Dsa.findOne({
+      $or: [{ domain: candidate }, { customDomains: candidate }],
+    }).lean();
+    if (byDomain) {
+      return {
+        dsa: byDomain,
+        source: byDomain.domain === candidate ? 'domain' : 'custom_domain',
+      };
+    }
+  }
+  const sub = subdomainFromHost(host);
+  if (sub) {
+    const bySub = await Dsa.findOne({ subdomain: sub }).lean();
+    if (bySub) return { dsa: bySub, source: 'subdomain' };
+  }
+  return null;
+}
+
+function assertWebsiteOpen(dsa) {
+  if (!dsa || String(dsa.status).toUpperCase() !== 'ACTIVE') {
+    throw AppError.forbidden('This website is temporarily unavailable');
+  }
+  if (dsa.websiteAccess && dsa.websiteAccess.status === 'REVOKED') {
+    throw AppError.forbidden('This website is temporarily unavailable');
+  }
 }
 
 async function resolvePublicTenant(req) {
@@ -73,61 +102,31 @@ async function resolvePublicTenant(req) {
   if (!config.isProduction && config.publicDevHostMap?.size) {
     const mappedCode = config.publicDevHostMap.get(host);
     if (mappedCode) {
-      const dsa = await findActiveDsaByCode(mappedCode);
+      const dsa = await findDsaByCode(mappedCode);
       if (!dsa) {
         throw AppError.notFound('Development tenant mapping points to an unavailable DSA');
       }
-      return {
-        dsa,
-        host,
-        source: 'dev_host_map',
-      };
+      assertWebsiteOpen(dsa);
+      return { dsa, host, source: 'dev_host_map' };
     }
   }
 
-  // 2) Exact custom domain match (local: try with/without port).
-  for (const candidate of domainLookupCandidates(host)) {
-    const byDomain = await findActiveDsaByDomain(candidate);
-    if (byDomain) {
-      return { dsa: byDomain, host, source: 'domain' };
-    }
+  const matched = await findDsaForHost(host);
+  if (!matched) {
+    throw AppError.notFound('No active website found for this domain');
   }
-
-  // 3) Subdomain of configured public base domain: {sub}.{base}
-  const hostNoPort = host.includes(':') ? host.split(':')[0] : host;
-  const base = config.publicTenantBaseDomain;
-  if (base && hostNoPort.endsWith(`.${base}`)) {
-    const sub = hostNoPort.slice(0, -(base.length + 1));
-    if (sub && !sub.includes('.')) {
-      const bySub = await findActiveDsaBySubdomain(sub);
-      if (bySub) {
-        return { dsa: bySub, host, source: 'subdomain' };
-      }
-    }
-  }
-
-  // 4) Also try host as subdomain token alone (legacy/simple setups).
-  if (!hostNoPort.includes('.')) {
-    const bySubAlone = await findActiveDsaBySubdomain(hostNoPort);
-    if (bySubAlone) {
-      return { dsa: bySubAlone, host, source: 'subdomain' };
-    }
-  }
-
-  // Distinguish suspended DSA that owns the domain (do not leak other tenants).
-  for (const candidate of domainLookupCandidates(host)) {
-    const anyDomain = await Dsa.findOne({ domain: candidate }).lean();
-    if (anyDomain && String(anyDomain.status).toUpperCase() !== 'ACTIVE') {
-      throw AppError.forbidden('This website is temporarily unavailable');
-    }
-  }
-
-  throw AppError.notFound('No active website found for this domain');
+  assertWebsiteOpen(matched.dsa);
+  return { dsa: matched.dsa, host, source: matched.source };
 }
 
 module.exports = {
   resolvePublicTenant,
   extractRequestHost,
-  findActiveDsaByCode,
+  findDsaByCode,
+  findActiveDsaByCode: async (code) => {
+    const dsa = await findDsaByCode(code);
+    if (!dsa || String(dsa.status).toUpperCase() !== 'ACTIVE') return null;
+    return dsa;
+  },
   parseDevHostMap,
 };

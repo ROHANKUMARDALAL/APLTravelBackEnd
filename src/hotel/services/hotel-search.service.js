@@ -72,6 +72,7 @@ async function persistSearchArtifacts({
     type: 'HOTEL',
     status,
     dsaId: context.dsaId || undefined,
+    userId: context.userId || undefined,
     requestId: context.requestId || undefined,
     request: criteria,
     results: {

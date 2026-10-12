@@ -10,7 +10,6 @@ const SupplierRawPayloadSchema = new mongoose.Schema(
   {
     supplierCode: {
       type: String,
-      required: true,
       uppercase: true,
       index: true,
     },

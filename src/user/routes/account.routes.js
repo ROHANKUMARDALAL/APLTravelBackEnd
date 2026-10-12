@@ -7,11 +7,22 @@ const { sendSuccess } = require('../../common/response/envelope');
 const { toPublicUser } = require('../services/auth.service');
 const AccountAction = require('../models/AccountAction');
 const ServiceLog = require('../../common/database/models/ServiceLog');
-const { Booking } = require('../../common/database/models/Booking');
+const { Booking, Payment } = require('../../common/database/models/Booking');
+const Refund = require('../../payments/models/Refund');
+const CancellationRequest = require('../../payments/models/CancellationRequest');
+const CustomerWallet = require('../../customer/models/CustomerWallet');
+const WalletTransaction = require('../../customer/models/WalletTransaction');
+const Search = require('../../common/database/models/Search');
 
 const router = express.Router();
 
 router.use(requireLogin);
+
+function customerScope(req) {
+  const scope = { userId: req.user._id };
+  if (req.customerDsaId) scope.dsaId = req.customerDsaId;
+  return scope;
+}
 
 router.get(
   '/logs',
@@ -85,8 +96,9 @@ router.get(
 router.get(
   '/cancellations',
   asyncHandler(async (req, res) => {
+    const scope = customerScope(req);
     const bookings = await Booking.find({
-      userId: req.user._id,
+      ...scope,
       status: 'CANCELLED',
     })
       .sort({ updatedAt: -1 })
@@ -101,6 +113,92 @@ router.get(
         currency: booking.currency,
         cancelledAt: booking.updatedAt,
       })),
+    });
+  }),
+);
+
+router.get(
+  '/wallet',
+  asyncHandler(async (req, res) => {
+    const scope = customerScope(req);
+    const wallet = await CustomerWallet.findOne(scope).lean();
+    const transactions = await WalletTransaction.find(scope).sort({ createdAt: -1 }).limit(50).lean();
+    return sendSuccess(res, {
+      currency: wallet?.currency || req.user.currency || 'INR',
+      balance: wallet ? wallet.balance : 0,
+      transactions: transactions.map((row) => ({
+        id: String(row._id),
+        amount: row.amount,
+        direction: row.direction,
+        type: row.type,
+        currency: row.currency,
+        reason: row.reason || '',
+        reference: row.reference || '',
+        balanceAfter: row.balanceAfter,
+        createdAt: row.createdAt,
+      })),
+    });
+  }),
+);
+
+router.get(
+  '/payments',
+  asyncHandler(async (req, res) => {
+    const scope = customerScope(req);
+    const [payments, refunds, cancellations] = await Promise.all([
+      Payment.find(scope).sort({ createdAt: -1 }).limit(50).lean(),
+      Refund.find(scope).sort({ createdAt: -1 }).limit(50).lean(),
+      CancellationRequest.find(scope).sort({ createdAt: -1 }).limit(50).lean(),
+    ]);
+    return sendSuccess(res, {
+      payments: payments.map((row) => ({
+        reference: row.paymentRef || String(row._id),
+        status: row.status,
+        amount: row.amount,
+        currency: row.currency,
+      })),
+      refunds: refunds.map((row) => ({
+        reference: row.refundRef || String(row._id),
+        status: row.status,
+        amount: row.amount,
+        currency: row.currency,
+      })),
+      cancellations: cancellations.map((row) => ({
+        reference: row.aplBookingRef || String(row._id),
+        status: row.status,
+      })),
+    });
+  }),
+);
+
+router.get(
+  '/activity',
+  asyncHandler(async (req, res) => {
+    const scope = customerScope(req);
+    const [bookings, searches] = await Promise.all([
+      Booking.find(scope).sort({ createdAt: -1 }).limit(30).select('aplBookingRef status createdAt').lean(),
+      Search.find({ ...scope }).sort({ createdAt: -1 }).limit(20).select('aplSearchId service createdAt').lean(),
+    ]);
+    const refs = bookings.map((row) => row.aplBookingRef).filter(Boolean);
+    const actions = refs.length
+      ? await AccountAction.find({ userId: req.user._id, aplBookingRef: { $in: refs } })
+          .sort({ createdAt: -1 })
+          .limit(50)
+          .lean()
+      : [];
+    return sendSuccess(res, {
+      bookings: bookings.map((row) => ({ reference: row.aplBookingRef, status: row.status, at: row.createdAt })),
+      searches: searches.map((row) => ({ reference: row.aplSearchId, service: row.service, at: row.createdAt })),
+      actions: actions.map((row) => ({ type: row.type, reference: row.aplBookingRef, amount: row.amount, at: row.createdAt })),
+    });
+  }),
+);
+
+router.get(
+  '/referral',
+  asyncHandler(async (req, res) => {
+    return sendSuccess(res, {
+      referralCode: req.customerMembership?.referralCode || '',
     });
   }),
 );

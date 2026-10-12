@@ -85,18 +85,20 @@ async function writeLifecycleLog(entry) {
         dsaId: entry.dsaId,
         operation: entry.operation,
         stage:
-          stage === 'SUPPLIER_REQUEST' || stage === 'SUPPLIER_RESPONSE'
+          stage === 'SUPPLIER_REQUEST' || stage === 'SUPPLIER_RESPONSE' || stage === 'NORMALIZED_RESPONSE'
             ? stage
             : 'OTHER',
         payload: entry.rawPayload,
       });
-      // Keep a tiny inline marker; full body via payloadRef.
       if (stage === 'SUPPLIER_REQUEST') {
         supplierRequest = { payloadRef: String(payloadRef || ''), stored: true };
         request = trimPayload(entry.request, 4_000).value;
       } else if (stage === 'SUPPLIER_RESPONSE') {
         result = { payloadRef: String(payloadRef || ''), stored: true };
         request = trimPayload(entry.request, 4_000).value;
+      } else {
+        const summary = entry.result && typeof entry.result === 'object' ? trimPayload(entry.result, 4_000).value : {};
+        result = { ...summary, payloadRef: String(payloadRef || ''), stored: true };
       }
     } else {
       if (request !== undefined) request = trimPayload(request).value;
@@ -143,3 +145,22 @@ module.exports = {
   MAX_INLINE_CHARS,
   MAX_RAW_CHARS,
 };
+
+async function logPublicSearchResult({ requestId, dsaId, userId, service, searchId, payload }) {
+  await writeLifecycleLog({
+    stage: 'NORMALIZED_RESPONSE',
+    direction: 'INBOUND',
+    requestId,
+    dsaId,
+    userId,
+    service,
+    operation: 'publicSearchResult',
+    searchId: searchId || payload?.searchId,
+    status: payload?.status === 'FAILED' ? 'FAILED' : payload?.status === 'PARTIAL' ? 'PARTIAL' : 'SUCCESS',
+    storeRaw: true,
+    rawPayload: payload,
+    result: { publicResponse: true, searchId: payload?.searchId || searchId || null },
+  });
+}
+
+module.exports.logPublicSearchResult = logPublicSearchResult;

@@ -258,6 +258,7 @@ async function searchBuses(dto, forcedFailureList, context = {}) {
     type: 'BUS',
     status,
     dsaId: context.dsaId || undefined,
+    userId: context.userId || undefined,
     requestId: context.requestId || undefined,
     request: criteria,
     results: payload,

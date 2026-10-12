@@ -3,6 +3,7 @@
 const express = require('express');
 const { asyncHandler } = require('../../common/middleware/error-handler');
 const { sendSuccess } = require('../../common/response/envelope');
+const { logPublicSearchResult } = require('../../common/services/lifecycle-log.service');
 const { requireLogin, optionalLogin } = require('../../common/middleware/require-login');
 const {
   requireTransactionTenant,
@@ -61,7 +62,16 @@ router.post(
       dsaId: req.tenant?.dsaId,
       tenant: req.tenant,
     });
-    return sendSuccess(res, sanitizeHotelSearchForPublic(result));
+    const publicResult = sanitizeHotelSearchForPublic(result);
+    await logPublicSearchResult({
+      requestId: req.requestId,
+      dsaId: req.tenant?.dsaId,
+      userId: req.user?._id,
+      service: 'HOTEL',
+      searchId: result.searchId,
+      payload: publicResult,
+    });
+    return sendSuccess(res, publicResult);
   }),
 );
 
@@ -93,6 +103,7 @@ router.post(
       await checkoutHotel(dto, {
         tenant: req.tenant,
         requestId: req.requestId,
+        couponCode: req.body?.couponCode,
       }),
     );
   }),

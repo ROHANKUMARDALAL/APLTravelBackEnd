@@ -107,6 +107,29 @@ function resolveMediaAbsolutePath(relativeUrl) {
   return abs;
 }
 
+function publicUploadRoots() {
+  const extra = process.env.EXTRA_UPLOAD_ROOT
+    || path.resolve(process.cwd(), '../../DSAADMIN/DSAAdminBackEnd/uploads');
+  return [UPLOAD_ROOT, extra]
+    .map((root) => path.resolve(root))
+    .filter((root, index, all) => all.indexOf(root) === index);
+}
+
+/** File written by this process, or by DSAAdmin into its own uploads folder. */
+function resolvePublicMediaFile(urlPath) {
+  const cleaned = String(urlPath || '')
+    .replace(/^\/media\//, '')
+    .replace(/^\/+/, '')
+    .replace(/\.\./g, '');
+  if (!cleaned) return null;
+  for (const root of publicUploadRoots()) {
+    const abs = path.resolve(root, cleaned);
+    if (!abs.startsWith(`${root}${path.sep}`)) continue;
+    if (fs.existsSync(abs) && fs.statSync(abs).isFile()) return abs;
+  }
+  return null;
+}
+
 module.exports = {
   UPLOAD_ROOT,
   ALLOWED_MIME,
@@ -114,4 +137,5 @@ module.exports = {
   storeDsaImage,
   validateImageBuffer,
   resolveMediaAbsolutePath,
+  resolvePublicMediaFile,
 };

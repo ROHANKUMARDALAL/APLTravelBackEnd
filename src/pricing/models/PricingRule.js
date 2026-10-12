@@ -62,6 +62,8 @@ const PricingRuleSchema = new mongoose.Schema(
     },
     /** Percent (e.g. 2.5) or major currency units for FIXED */
     value: { type: Number, required: true },
+    /** Optional rupee cap for a percentage discount. Null means no cap. */
+    maxAmount: { type: Number, default: null, min: 0 },
     /** Required for FIXED; ignored for PERCENTAGE */
     currency: { type: String, uppercase: true, default: null },
     status: {
@@ -79,6 +81,17 @@ const PricingRuleSchema = new mongoose.Schema(
       enum: ['ONEWAY', 'ROUNDTRIP', null],
       default: null,
     },
+    /** Authenticated customer (User id). Null = all customers of this DSA. */
+    customerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
+    originCode: { type: String, uppercase: true, trim: true, default: null },
+    destinationCode: { type: String, uppercase: true, trim: true, default: null },
+    airlineCode: { type: String, uppercase: true, trim: true, default: null },
+    archivedAt: { type: Date, default: null },
     notes: { type: String, default: '', maxlength: 1000 },
   },
   { timestamps: true },

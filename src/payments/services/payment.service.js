@@ -181,6 +181,12 @@ async function capturePayment({
   paymentDoc.providerMeta = result.providerMeta || {};
   await paymentDoc.save();
 
+  const couponKey = session.commercialSnapshot?.couponRedemptionKey;
+  if (couponKey) {
+    const { settleCoupon } = require('../../pricing/services/coupon.service');
+    await settleCoupon(couponKey, result.ok ? 'CONSUMED' : 'RELEASED');
+  }
+
   await writeLifecycleLog({
     stage: result.ok ? 'PAYMENT_SUCCESS' : 'PAYMENT_FAILED',
     service: String(session.productType || 'FLIGHT').toLowerCase(),

@@ -204,6 +204,9 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     dsaId: context.dsaId || null,
     serviceCode: 'flight',
     tripType: criteria.tripType || null,
+    originCode: criteria.originCityCode || null,
+    destinationCode: criteria.destinationCityCode || null,
+    customerId: context.userId || null,
   });
   const flights = consolidateFlightOffers(clusters, pricingContext).sort(
     (a, b) => a.lowestPrice.amount - b.lowestPrice.amount,
@@ -268,6 +271,7 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     type: 'FLIGHT',
     status,
     dsaId: context.dsaId || undefined,
+    userId: context.userId || undefined,
     requestId: context.requestId || undefined,
     request: criteria,
     results: payload,

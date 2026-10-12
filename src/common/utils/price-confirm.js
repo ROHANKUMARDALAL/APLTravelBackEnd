@@ -48,23 +48,56 @@ function assertExactPrice(required, confirmPrice) {
   }
 }
 
+function addonIdentity(raw) {
+  if (typeof raw === 'string') {
+    return { code: raw.trim(), passengerKey: '', segmentKey: '' };
+  }
+  if (raw && typeof raw === 'object') {
+    return {
+      code: String(raw.code || '').trim(),
+      passengerKey: String(raw.passengerKey || ''),
+      segmentKey: String(raw.segmentKey || ''),
+    };
+  }
+  return { code: '', passengerKey: '', segmentKey: '' };
+}
+
 function sumSelected(catalog, codes, label) {
   const selected = [];
   const seen = new Set();
-  for (const raw of codes) {
-    const code = String(raw).trim();
-    if (!code) continue;
-    if (seen.has(code)) {
-      throw AppError.validation(`Duplicate ${label} code: ${code}`);
+  const passengerSeat = new Set();
+  for (const raw of codes || []) {
+    const identity = addonIdentity(raw);
+    if (!identity.code) continue;
+    const key = label === 'seat'
+      ? `seat:${identity.segmentKey}:${identity.code}`
+      : `${label}:${identity.passengerKey}:${identity.segmentKey}:${identity.code}`;
+    if (seen.has(key)) {
+      throw AppError.validation(
+        label === 'seat'
+          ? `Seat ${identity.code} is already selected on this flight`
+          : `Duplicate ${label} code: ${identity.code}`,
+      );
     }
-    seen.add(code);
-    const item = catalog.find((row) => row.code === code);
+    if (label === 'seat' && identity.passengerKey) {
+      const own = `${identity.passengerKey}:${identity.segmentKey}`;
+      if (passengerSeat.has(own)) {
+        throw AppError.validation('Each passenger can select one seat on a segment');
+      }
+      passengerSeat.add(own);
+    }
+    seen.add(key);
+    const item = catalog.find((row) => row.code === identity.code);
     if (!item) {
-      throw AppError.validation(`Unknown ${label} code: ${code}`, [
+      throw AppError.validation(`Unknown ${label} code: ${identity.code}`, [
         `Allowed: ${catalog.map((row) => row.code).join(', ')}`,
       ]);
     }
-    selected.push(item);
+    selected.push({
+      ...item,
+      passengerKey: identity.passengerKey || null,
+      segmentKey: identity.segmentKey || null,
+    });
   }
   const amount = selected.reduce((sum, item) => sum + item.price.amount, 0);
   return { selected, amount };

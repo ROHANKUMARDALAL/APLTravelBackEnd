@@ -28,6 +28,7 @@
     "./models": "./models/index.js",
     "./models/*": "./models/*.js",
     "./constants": "./constants/index.js",
-    "./constants/*": "./constants/*.js"
+    "./constants/*": "./constants/*.js",
+    "./security/*": "./security/*.js"
   }
 }

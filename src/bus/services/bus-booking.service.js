@@ -56,6 +56,16 @@ async function checkoutBus(dto, context = {}) {
     dsaId: context.tenant?.dsaId || null,
     serviceCode: 'bus',
   });
+  if (context.couponCode) {
+    const { loadEngineCoupon } = require('../../pricing/services/coupon.service');
+    const loaded = await loadEngineCoupon({
+      dsaId: context.tenant?.dsaId,
+      serviceCode: 'bus',
+      code: context.couponCode,
+      customerId: context.userId,
+    });
+    pricingContext.coupon = loaded.input;
+  }
   const unitSupplier = offer.supplierPrice || {
     amount: Number(offer.price?.amount) || 0,
     currency: offer.price?.currency || 'INR',

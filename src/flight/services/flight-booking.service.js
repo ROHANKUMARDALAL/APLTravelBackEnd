@@ -19,6 +19,7 @@ const {
   calculatePrice,
 } = require('../../pricing/services/pricing-engine.service');
 const { toMinor, toMajor } = require('../../pricing/money');
+const Search = require('../../common/database/models/Search');
 
 const FARE_TIER_MULTIPLIERS = [1, 1.08, 1.18, 1.26];
 
@@ -129,6 +130,12 @@ function quoteFlightPrice(dto, fare, { lockUnit = false } = {}) {
   const seats = sumSelected(catalog.seats, dto.addOns?.seats || [], 'seat');
   const baggage = sumSelected(catalog.baggage, dto.addOns?.baggage || [], 'baggage');
   const meals = sumSelected(catalog.meals, dto.addOns?.meals || [], 'meal');
+  const infantKeys = new Set(
+    (dto.travellers || []).filter((traveller) => isInfant(traveller) && traveller.passengerKey).map((traveller) => traveller.passengerKey),
+  );
+  if (seats.selected.some((seat) => seat.passengerKey && infantKeys.has(seat.passengerKey))) {
+    throw AppError.validation('Infants cannot select a seat');
+  }
   const payableTravellers = payingTravellerCount(dto.travellers);
   const unitAmount = lockUnit
     ? Number(fare.price.amount)
@@ -157,10 +164,35 @@ async function checkoutFlight(dto, context = {}) {
   }
 
   // Recalculate commercial layer from preserved supplier price (authoritative).
+  // Route comes from the stored search, and the customer comes from the session.
+  const storedSearch = dto.searchId
+    ? await Search.findOne({
+        aplSearchId: dto.searchId,
+        ...(context.tenant?.dsaId ? { dsaId: context.tenant.dsaId } : {}),
+      })
+        .select('request')
+        .lean()
+    : null;
+  const storedRequest = storedSearch?.request || {};
   const pricingContext = await createPricingContext({
     dsaId: context.tenant?.dsaId || null,
     serviceCode: 'flight',
+    tripType: storedRequest.tripType || null,
+    originCode: storedRequest.originCityCode || null,
+    destinationCode: storedRequest.destinationCityCode || null,
+    customerId: context.userId || null,
   });
+  if (context.couponCode) {
+    const { loadEngineCoupon } = require('../../pricing/services/coupon.service');
+    const loaded = await loadEngineCoupon({
+      dsaId: context.tenant?.dsaId,
+      serviceCode: 'flight',
+      code: context.couponCode,
+      customerId: context.userId,
+    });
+    pricingContext.coupon = loaded.input;
+    context.couponRecord = loaded.coupon;
+  }
   const supplierPrice = fare.supplierPrice || {
     amount: Number(fare.price?.amount) || 0,
     currency: fare.price?.currency || 'INR',
@@ -168,6 +200,7 @@ async function checkoutFlight(dto, context = {}) {
   const priced = calculatePrice({
     supplierPrice,
     supplierCode: fare.supplier || null,
+    airlineCode: details.flight?.airline?.code || null,
     context: pricingContext,
     includeInternal: true,
   });
@@ -194,6 +227,16 @@ async function checkoutFlight(dto, context = {}) {
 
   const quote = quoteFlightPrice(dto, fareForQuote, { lockUnit: true });
   assertExactPrice(quote, dto.confirmPrice);
+  let couponRedemptionKey = null;
+  if (context.couponRecord) {
+    const { reserveCoupon } = require('../../pricing/services/coupon.service');
+    couponRedemptionKey = `flight:${dto.searchId}:${context.couponRecord.code}:${context.requestId || 'checkout'}`;
+    await reserveCoupon({
+      coupon: context.couponRecord,
+      customerId: context.userId,
+      idempotencyKey: couponRedemptionKey,
+    });
+  }
 
   const selectedQuote = dto.selectedFareQuote || null;
   const chargedUnitAmount = Number(quote.unitAmount) || Number(fareForQuote.price?.amount) || 0;
@@ -218,6 +261,7 @@ async function checkoutFlight(dto, context = {}) {
       payableTravellers: quote.payableTravellers,
       addonsAmount: quote.addonsAmount,
       totalAmount: quote.amount,
+      couponRedemptionKey,
     },
     pricing: {
       amount: quote.amount,

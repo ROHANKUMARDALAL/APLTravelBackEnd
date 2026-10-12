@@ -21,7 +21,9 @@ function toPublic(doc) {
     nationality: doc.nationality || '',
     travellerType: doc.travellerType || 'adult',
     passportNumber: doc.passportNumber || '',
+    passportIssueDate: doc.passportIssueDate || '',
     passportExpiry: doc.passportExpiry || '',
+    passportIssueCountry: doc.passportIssueCountry || '',
   };
 }
 
@@ -42,13 +44,17 @@ function readFields(body) {
     nationality: String(body?.nationality || '').trim(),
     travellerType,
     passportNumber: String(body?.passportNumber || '').trim(),
+    passportIssueDate: String(body?.passportIssueDate || '').trim(),
     passportExpiry: String(body?.passportExpiry || '').trim(),
+    passportIssueCountry: String(body?.passportIssueCountry || '').trim(),
   };
 }
 
-async function findOwned(userId, id) {
+async function findOwned(userId, id, dsaId) {
   if (!mongoose.isValidObjectId(id)) throw AppError.notFound('Traveller not found');
-  const doc = await SavedTraveller.findOne({ _id: id, userId });
+  const filter = { _id: id, userId };
+  if (dsaId) filter.dsaId = dsaId;
+  const doc = await SavedTraveller.findOne(filter);
   if (!doc) throw AppError.notFound('Traveller not found');
   return doc;
 }
@@ -57,7 +63,9 @@ router.get(
   '/',
   requireLogin,
   asyncHandler(async (req, res) => {
-    const rows = await SavedTraveller.find({ userId: req.user._id }).sort({ updatedAt: -1 });
+    const filter = { userId: req.user._id };
+    if (req.customerDsaId) filter.dsaId = req.customerDsaId;
+    const rows = await SavedTraveller.find(filter).sort({ updatedAt: -1 });
     return sendSuccess(res, { travellers: rows.map(toPublic) });
   }),
 );
@@ -69,7 +77,7 @@ router.post(
     const fields = readFields(req.body);
     let doc = null;
     if (req.body?.id) {
-      doc = await findOwned(req.user._id, req.body.id);
+      doc = await findOwned(req.user._id, req.body.id, req.customerDsaId);
     } else {
       doc = await SavedTraveller.findOne({
         userId: req.user._id,
@@ -82,7 +90,11 @@ router.post(
       Object.assign(doc, fields);
       await doc.save();
     } else {
-      doc = await SavedTraveller.create({ userId: req.user._id, ...fields });
+      doc = await SavedTraveller.create({
+        userId: req.user._id,
+        dsaId: req.customerDsaId || undefined,
+        ...fields,
+      });
     }
     return sendSuccess(res, { traveller: toPublic(doc) });
   }),
@@ -92,7 +104,7 @@ router.patch(
   '/:id',
   requireLogin,
   asyncHandler(async (req, res) => {
-    const doc = await findOwned(req.user._id, req.params.id);
+    const doc = await findOwned(req.user._id, req.params.id, req.customerDsaId);
     Object.assign(doc, readFields({ ...toPublic(doc), ...req.body }));
     await doc.save();
     return sendSuccess(res, { traveller: toPublic(doc) });
@@ -103,7 +115,7 @@ router.delete(
   '/:id',
   requireLogin,
   asyncHandler(async (req, res) => {
-    const doc = await findOwned(req.user._id, req.params.id);
+    const doc = await findOwned(req.user._id, req.params.id, req.customerDsaId);
     await doc.deleteOne();
     return sendSuccess(res, { id: String(doc._id) });
   }),

@@ -14,11 +14,15 @@ const PRICING_VERSION = '12.0';
  *   Platform+service+supplier > Platform+service > Platform global
  * DSA-scoped kinds only consider DSA rules (except ceilings which are PLATFORM).
  */
-function specificityScore(rule, { dsaId, serviceCode, supplierCode }) {
+function specificityScore(rule, ctx = {}) {
   let score = 0;
-  const svc = serviceCode ? String(serviceCode).toLowerCase() : null;
-  const sup = supplierCode ? String(supplierCode).toUpperCase() : null;
-  const dsa = dsaId ? String(dsaId) : null;
+  const svc = ctx.serviceCode ? String(ctx.serviceCode).toLowerCase() : null;
+  const sup = ctx.supplierCode ? String(ctx.supplierCode).toUpperCase() : null;
+  const dsa = ctx.dsaId ? String(ctx.dsaId) : null;
+  const origin = ctx.originCode ? String(ctx.originCode).toUpperCase() : null;
+  const destination = ctx.destinationCode ? String(ctx.destinationCode).toUpperCase() : null;
+  const airline = ctx.airlineCode ? String(ctx.airlineCode).toUpperCase() : null;
+  const customer = ctx.customerId ? String(ctx.customerId) : null;
 
   if (rule.serviceCode) {
     if (!svc || rule.serviceCode !== svc) return -1;
@@ -28,6 +32,23 @@ function specificityScore(rule, { dsaId, serviceCode, supplierCode }) {
     if (!sup || rule.supplierCode !== sup) return -1;
     score += 5;
   }
+  if (rule.customerId) {
+    if (!customer || String(rule.customerId) !== customer) return -1;
+    score += 40;
+  }
+  if (rule.originCode) {
+    if (!origin || String(rule.originCode).toUpperCase() !== origin) return -1;
+    score += 8;
+  }
+  if (rule.destinationCode) {
+    if (!destination || String(rule.destinationCode).toUpperCase() !== destination) return -1;
+    score += 8;
+  }
+  if (rule.airlineCode) {
+    if (!airline || String(rule.airlineCode).toUpperCase() !== airline) return -1;
+    score += 6;
+  }
+  if (rule.tripType && ctx.tripType && rule.tripType === ctx.tripType) score += 4;
   if (rule.ownerScope === 'DSA') {
     if (!dsa || String(rule.dsaId) !== dsa) return -1;
     score += 20;
@@ -39,6 +60,7 @@ function specificityScore(rule, { dsaId, serviceCode, supplierCode }) {
 }
 
 function isEffective(rule, at) {
+  if (rule.archivedAt) return false;
   if (rule.status !== 'ACTIVE') return false;
   const t = at.getTime();
   if (rule.effectiveFrom && new Date(rule.effectiveFrom).getTime() > t) return false;
@@ -86,6 +108,55 @@ function adjustmentMinor(rule, baseMinor, currency) {
   return { minor: toMinor(rule.value), skipped: false, reason: null };
 }
 
+function pickTypedCeiling(rules, adjustmentType, ctx) {
+  const typed = (rules || []).filter(
+    (rule) => rule.ruleKind === RULE_KINDS.DSA_MARKUP_CEILING && rule.adjustmentType === adjustmentType,
+  );
+  return pickBestRule(typed, RULE_KINDS.DSA_MARKUP_CEILING, ctx);
+}
+
+function ceilingCapMinor(ceiling, supplierMinor, currency) {
+  if (!ceiling) return null;
+  if (ceiling.adjustmentType === 'PERCENTAGE') {
+    return percentOfMinor(supplierMinor, ceiling.value);
+  }
+  const ruleCurrency = ceiling.currency ? String(ceiling.currency).toUpperCase() : null;
+  if (ruleCurrency && ruleCurrency !== String(currency).toUpperCase()) return null;
+  return toMinor(ceiling.value);
+}
+
+/**
+ * Same-type ceilings compare like with like.
+ * A fixed markup is never compared with a raw percentage: it is kept only
+ * when its rupee amount is within the percentage of the supplier fare.
+ */
+function enforceDsaCeiling(dsaRule, rules, ctx, supplierMinor, currency) {
+  if (!dsaRule) return { rule: null, blocked: false, ceilingRule: null };
+  const same = pickTypedCeiling(rules, dsaRule.adjustmentType, ctx);
+  const otherType = dsaRule.adjustmentType === 'PERCENTAGE' ? 'FIXED' : 'PERCENTAGE';
+  const other = pickTypedCeiling(rules, otherType, ctx);
+  if (same) {
+    if (Number(dsaRule.value) > Number(same.value)) {
+      return { rule: null, blocked: true, ceilingRule: same };
+    }
+    return { rule: dsaRule, blocked: false, ceilingRule: same };
+  }
+  if (!other) return { rule: dsaRule, blocked: false, ceilingRule: null };
+  const allowed = ceilingCapMinor(other, supplierMinor, currency);
+  const requested = adjustmentMinor(dsaRule, supplierMinor, currency);
+  if (allowed == null || requested.skipped || requested.minor > allowed) {
+    return { rule: null, blocked: true, ceilingRule: other };
+  }
+  return { rule: dsaRule, blocked: false, ceilingRule: other };
+}
+
+function ceilingsByType(rules, ctx) {
+  return {
+    percentage: pickTypedCeiling(rules, 'PERCENTAGE', ctx),
+    fixed: pickTypedCeiling(rules, 'FIXED', ctx),
+  };
+}
+
 function appliedEntry(rule, amountMajor, extra = {}) {
   if (!rule) return null;
   return {
@@ -108,11 +179,15 @@ async function createPricingContext({
   dsaId = null,
   serviceCode = null,
   tripType = null,
+  originCode = null,
+  destinationCode = null,
+  customerId = null,
   at = new Date(),
 } = {}) {
   const svc = serviceCode ? String(serviceCode).toLowerCase() : null;
   const filter = {
     status: 'ACTIVE',
+    archivedAt: null,
     $and: [
       {
         $or: [{ effectiveFrom: null }, { effectiveFrom: { $lte: at } }],
@@ -141,6 +216,9 @@ async function createPricingContext({
     dsaId: dsaId ? String(dsaId) : null,
     serviceCode: svc,
     tripType: tripType || null,
+    originCode: originCode ? String(originCode).toUpperCase() : null,
+    destinationCode: destinationCode ? String(destinationCode).toUpperCase() : null,
+    customerId: customerId ? String(customerId) : null,
     at,
     rules,
     pricingVersion: PRICING_VERSION,
@@ -172,6 +250,7 @@ function legacyAplFallbackRule(percent) {
 function calculatePrice({
   supplierPrice,
   supplierCode = null,
+  airlineCode = null,
   context,
   includeInternal = true,
 }) {
@@ -188,6 +267,14 @@ function calculatePrice({
       ? String(supplierCode).toUpperCase()
       : null,
     tripType: context?.tripType || null,
+    originCode: context?.originCode ? String(context.originCode).toUpperCase() : null,
+    destinationCode: context?.destinationCode ? String(context.destinationCode).toUpperCase() : null,
+    airlineCode: airlineCode
+      ? String(airlineCode).toUpperCase()
+      : context?.airlineCode
+        ? String(context.airlineCode).toUpperCase()
+        : null,
+    customerId: context?.customerId ? String(context.customerId) : null,
     at: context?.at || new Date(),
   };
   const rules = context?.rules || [];
@@ -197,8 +284,11 @@ function calculatePrice({
     aplRule = legacyAplFallbackRule(config.defaultMarkupPercent);
   }
 
-  const ceilingRule = pickBestRule(rules, RULE_KINDS.DSA_MARKUP_CEILING, ctx);
   let dsaRule = pickBestRule(rules, RULE_KINDS.DSA_MARKUP, ctx);
+  const enforcedCeiling = enforceDsaCeiling(dsaRule, rules, ctx, supplierMinor, currency);
+  dsaRule = enforcedCeiling.rule;
+  const ceilingRule = enforcedCeiling.ceilingRule;
+  const ceilingBlocked = enforcedCeiling.blocked;
   const feeRule = pickBestRule(rules, RULE_KINDS.SERVICE_FEE, ctx);
   const commissionRule = pickBestRule(
     rules,
@@ -207,30 +297,68 @@ function calculatePrice({
   );
   const discountRule = pickBestRule(rules, RULE_KINDS.DISCOUNT, ctx);
 
-  // Enforce DSA ceiling (same adjustment type only).
-  let ceilingBlocked = false;
-  if (dsaRule && ceilingRule) {
-    if (dsaRule.adjustmentType !== ceilingRule.adjustmentType) {
-      // Incompatible types → block DSA markup (safe).
-      dsaRule = null;
-      ceilingBlocked = true;
-    } else if (Number(dsaRule.value) > Number(ceilingRule.value)) {
-      dsaRule = null;
-      ceilingBlocked = true;
-    }
-  } else if (dsaRule && !ceilingRule) {
-    // No ceiling configured → DSA markup still allowed (APL can set ceiling=0 to block).
-  }
-
   const commission = adjustmentMinor(commissionRule, supplierMinor, currency);
   const apl = adjustmentMinor(aplRule, supplierMinor, currency);
   const dsa = adjustmentMinor(dsaRule, supplierMinor, currency);
   const fee = adjustmentMinor(feeRule, supplierMinor, currency);
   const discount = adjustmentMinor(discountRule, supplierMinor, currency);
+  let discountCapped = false;
+  let discountMaxCapped = false;
+  if (discountRule?.adjustmentType === 'PERCENTAGE' && discount.minor > 0 && discountRule.maxAmount != null && discountRule.maxAmount !== '') {
+    const max = Number(discountRule.maxAmount);
+    if (Number.isFinite(max) && max > 0) {
+      const capMinor = toMinor(max);
+      if (discount.minor > capMinor) {
+        discount.minor = capMinor;
+        discountMaxCapped = true;
+      }
+    }
+  }
+  if (discountRule && discountRule.ownerScope === 'DSA' && discount.minor > 0) {
+    const ownMinor = dsa.minor + fee.minor;
+    if (discount.minor > ownMinor) {
+      discount.minor = ownMinor;
+      discountCapped = true;
+      discount.reason = ownMinor === 0
+        ? 'DSA_DISCOUNT_NO_OWN_MARGIN'
+        : 'DSA_DISCOUNT_CAPPED_TO_OWN_MARGIN';
+      if (ownMinor === 0) discount.skipped = true;
+    }
+  }
+
+  const couponInput = context?.coupon || null;
+  let couponMinor = 0;
+  let couponStatus = null;
+  if (couponInput) {
+    const pricedBeforeCoupon = supplierMinor + apl.minor + dsa.minor + fee.minor - discount.minor;
+    const minimum = Number(couponInput.minAmount || 0);
+    if (couponInput.exclusive && discount.minor > 0) {
+      couponStatus = 'COUPON_CANNOT_COMBINE';
+    } else if (minimum > 0 && pricedBeforeCoupon < toMinor(minimum)) {
+      couponStatus = 'COUPON_MINIMUM_NOT_MET';
+    } else {
+      const requested = adjustmentMinor(
+        {
+          adjustmentType: couponInput.adjustmentType,
+          value: couponInput.value,
+          currency,
+        },
+        supplierMinor,
+        currency,
+      );
+      const max = couponInput.maxAmount == null || couponInput.maxAmount === '' ? null : Number(couponInput.maxAmount);
+      const capped = Number.isFinite(max) && max > 0
+        ? Math.min(requested.minor, toMinor(max))
+        : requested.minor;
+      const room = Math.max(0, dsa.minor + fee.minor - discount.minor);
+      couponMinor = Math.min(Math.max(0, capped), room);
+      couponStatus = couponMinor > 0 ? 'APPLIED' : 'COUPON_NO_REMAINING_MARGIN';
+    }
+  }
 
   const finalMinor = Math.max(
     0,
-    supplierMinor + apl.minor + dsa.minor + fee.minor - discount.minor,
+    supplierMinor + apl.minor + dsa.minor + fee.minor - discount.minor - couponMinor,
   );
 
   const appliedRules = [
@@ -254,6 +382,7 @@ function calculatePrice({
     appliedEntry(discountRule, toMajor(discount.minor), {
       skipped: discount.skipped,
       skipReason: discount.reason,
+      discountCapped,
     }),
   ].filter(Boolean);
 
@@ -266,12 +395,30 @@ function calculatePrice({
     aplMarkup: { amount: toMajor(apl.minor), currency },
     dsaMarkup: { amount: toMajor(dsa.minor), currency },
     serviceFee: { amount: toMajor(fee.minor), currency },
-    discount: { amount: toMajor(discount.minor), currency },
+    discount: {
+      amount: toMajor(discount.minor),
+      currency,
+      adjustmentType: discountRule?.adjustmentType || null,
+      value: discountRule ? Number(discountRule.value) : null,
+      capped: discountCapped,
+      maxAmount: discountRule?.maxAmount == null ? null : Number(discountRule.maxAmount),
+      cappedByMaximum: discountMaxCapped,
+    },
+    coupon: {
+      amount: toMajor(couponMinor),
+      currency,
+      code: couponInput?.code || null,
+      status: couponStatus,
+      adjustmentType: couponInput?.adjustmentType || null,
+      value: couponInput?.value == null ? null : Number(couponInput.value),
+      maxAmount: couponInput?.maxAmount == null ? null : Number(couponInput.maxAmount),
+    },
     finalPrice: { amount: toMajor(finalMinor), currency },
     appliedRuleIds: appliedRules.map((r) => r.ruleId),
     appliedRules: includeInternal ? appliedRules : undefined,
     ceilingRuleId: ceilingRule ? String(ceilingRule._id) : null,
     ceilingBlocked,
+    discountCapped,
     serviceCode: ctx.serviceCode,
     supplierCode: ctx.supplierCode,
     dsaId: ctx.dsaId,
@@ -299,5 +446,6 @@ module.exports = {
   calculatePrice,
   publicPriceView,
   pickBestRule,
+  ceilingsByType,
   specificityScore,
 };

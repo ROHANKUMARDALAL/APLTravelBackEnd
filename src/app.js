@@ -12,7 +12,7 @@ const {
   errorHandler,
   notFoundHandler,
 } = require('./common/middleware/error-handler');
-const { UPLOAD_ROOT } = require('./common/media/storage');
+const { resolvePublicMediaFile } = require('./common/media/storage');
 const healthRoutes = require('./health/routes/health.routes');
 const readyRoutes = require('./health/routes/ready.routes');
 const suppliersRoutes = require('./suppliers/routes/suppliers.routes');
@@ -108,15 +108,14 @@ function createApp(options = {}) {
   app.use(`/${config.apiPrefix}/travellers`, travellersRoutes);
   app.use(`/${config.apiPrefix}/bookings`, bookingsRoutes);
 
-  // Local/dev media files (Phase 7). Production should use object storage behind the same /media URL shape.
-  app.use(
-    '/media',
-    express.static(UPLOAD_ROOT, {
-      fallthrough: false,
-      maxAge: '7d',
-      index: false,
-    }),
-  );
+  // Local/dev media. DSAAdmin writes into its own uploads folder; this serves that file too.
+  app.use('/media', (req, res, next) => {
+    const abs = resolvePublicMediaFile(req.path);
+    if (!abs) return next();
+    res.set('Cache-Control', 'private, no-cache');
+    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    return res.sendFile(abs);
+  });
 
   // Phase 15G: admin namespaces belong to APLAdminBackEnd :3005 and DSAAdminBackEnd :3004.
   if (includeAdminNamespaces) {

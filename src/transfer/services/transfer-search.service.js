@@ -235,6 +235,7 @@ async function searchTransfers(dto, forcedFailureList, context = {}) {
     type: 'TRANSFER',
     status,
     dsaId: context.dsaId || undefined,
+    userId: context.userId || undefined,
     requestId: context.requestId || undefined,
     request: criteria,
     results: payload,

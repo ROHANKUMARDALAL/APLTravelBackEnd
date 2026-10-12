@@ -41,6 +41,13 @@ const Permission = Object.freeze({
   USER_VIEW: 'user.view',
   USER_MANAGE: 'user.manage',
 
+  CUSTOMER_VIEW: 'customer.view',
+  CUSTOMER_MANAGE: 'customer.manage',
+  CUSTOMER_STATUS: 'customer.status.manage',
+  CUSTOMER_WALLET_VIEW: 'customer.wallet.view',
+  CUSTOMER_WALLET_ADJUST: 'customer.wallet.adjust',
+  CUSTOMER_ACTIVITY_VIEW: 'customer.activity.view',
+
   AUDIT_VIEW: 'audit.view',
 
   SETTINGS_VIEW: 'settings.view',

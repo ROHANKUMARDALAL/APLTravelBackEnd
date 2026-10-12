@@ -2,6 +2,19 @@
 
 const { AppError } = require('../errors/app-error');
 const { userFromLoginToken } = require('../../user/services/auth.service');
+const { resolvePublicTenant } = require('../../public-site/services/resolve-tenant.service');
+const { assertCustomerCanUseDsa } = require('../../customer/services/membership.service');
+
+async function bindCustomerTenant(req, user) {
+  try {
+    const { dsa } = await resolvePublicTenant(req);
+    req.customerMembership = await assertCustomerCanUseDsa({ userId: user._id, dsaId: dsa._id });
+    req.customerDsaId = dsa._id;
+  } catch (err) {
+    const status = err.httpStatus || err.statusCode || err.status;
+    if (status === 403) throw err;
+  }
+}
 
 function readLoginToken(req) {
   const header = req.header('authorization') || '';
@@ -23,6 +36,7 @@ async function requireLogin(req, _res, next) {
     const user = await userFromLoginToken(token);
     req.user = user;
     req.loginToken = token;
+    await bindCustomerTenant(req, user);
     next();
   } catch (err) {
     next(err);

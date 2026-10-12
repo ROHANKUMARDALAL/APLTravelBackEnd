@@ -9,6 +9,8 @@ const UserSchema = new mongoose.Schema(
     phoneNumber: { type: String, required: true, trim: true },
     passwordHash: { type: String, required: true },
     profilePhoto: { type: String, default: null },
+    dateOfBirth: { type: String, default: '', trim: true },
+    nationality: { type: String, default: '', trim: true },
     currency: { type: String, required: true, uppercase: true },
     /** Wallet balance in the user's currency. Card/UPI bookings do not spend this. */
     balance: { type: Number, required: true, default: 0 },

@@ -80,8 +80,22 @@ function parseDevHostMap(raw) {
   return map;
 }
 
+/**
+ * Development label for `{subdomain}.localhost[:port]`.
+ * Bare localhost is not a tenant subdomain.
+ */
+function developmentSubdomain(host) {
+  const normalized = normalizeHost(host);
+  const hostname = normalized.includes(':') ? normalized.split(':')[0] : normalized;
+  if (!hostname.endsWith('.localhost')) return '';
+  const label = hostname.slice(0, -'.localhost'.length);
+  if (!label || label.includes('.')) return '';
+  return label;
+}
+
 module.exports = {
   normalizeHost,
   parseDevHostMap,
   isLocalHost,
+  developmentSubdomain,
 };

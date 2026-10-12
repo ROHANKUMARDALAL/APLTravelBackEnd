@@ -15,6 +15,34 @@ const {
   listOfferedServicesForDsa,
 } = require('../../tenant/services/service-offer.service');
 
+function publicBlogImages(blog) {
+  const stored = Array.isArray(blog.images) ? blog.images.filter((row) => row && row.url) : [];
+  const images = stored.length
+    ? stored
+    : (blog.featuredImageUrl ? [{ url: blog.featuredImageUrl, alt: '', caption: '', cover: true }] : []);
+  return images.map((row) => ({
+    url: row.url,
+    alt: row.alt || '',
+    caption: row.caption || '',
+    cover: Boolean(row.cover),
+  }));
+}
+
+function publicBlogCard(blog) {
+  const images = publicBlogImages(blog);
+  const cover = images.find((row) => row.cover) || images[0];
+  return {
+    title: blog.title,
+    slug: blog.slug,
+    shortDescription: blog.shortDescription || '',
+    featuredImageUrl: cover?.url || blog.featuredImageUrl || '',
+    images,
+    publishDate: blog.publishDate,
+    seoTitle: blog.seoTitle || '',
+    seoDescription: blog.seoDescription || '',
+  };
+}
+
 function publicBranding(settings) {
   return {
     websiteName: settings?.websiteName || '',
@@ -34,7 +62,7 @@ async function buildPublicSiteConfig(dsa) {
         .sort({ publishDate: -1 })
         .limit(20)
         .select(
-          'title slug shortDescription featuredImageUrl publishDate seoTitle seoDescription',
+          'title slug shortDescription featuredImageUrl images publishDate seoTitle seoDescription',
         )
         .lean(),
       Testimonial.find({ dsaId, status: 'ACTIVE' })
@@ -59,7 +87,11 @@ async function buildPublicSiteConfig(dsa) {
       displayName: dsa.displayName,
       companyName: dsa.companyName,
     },
-    branding: publicBranding(settings),
+    branding: {
+      ...publicBranding(settings),
+      websiteName:
+        settings?.websiteName || dsa.displayName || dsa.companyName || '',
+    },
     contact: {
       email: settings?.contact?.email || '',
       phone: settings?.contact?.phone || '',
@@ -116,15 +148,7 @@ async function buildPublicSiteConfig(dsa) {
       serviceCode: b.serviceCode || '',
       displayOrder: b.displayOrder,
     })),
-    blogs: blogs.map((b) => ({
-      title: b.title,
-      slug: b.slug,
-      shortDescription: b.shortDescription || '',
-      featuredImageUrl: b.featuredImageUrl || '',
-      publishDate: b.publishDate,
-      seoTitle: b.seoTitle || '',
-      seoDescription: b.seoDescription || '',
-    })),
+    blogs: blogs.map(publicBlogCard),
   };
 }
 
@@ -139,20 +163,12 @@ async function listPublicBlogs(dsaId, { page = 1, pageSize = 20 } = {}) {
       .skip((safePage - 1) * safeSize)
       .limit(safeSize)
       .select(
-        'title slug shortDescription featuredImageUrl publishDate seoTitle seoDescription',
+        'title slug shortDescription featuredImageUrl images publishDate seoTitle seoDescription',
       )
       .lean(),
   ]);
   return {
-    items: rows.map((b) => ({
-      title: b.title,
-      slug: b.slug,
-      shortDescription: b.shortDescription || '',
-      featuredImageUrl: b.featuredImageUrl || '',
-      publishDate: b.publishDate,
-      seoTitle: b.seoTitle || '',
-      seoDescription: b.seoDescription || '',
-    })),
+    items: rows.map(publicBlogCard),
     pagination: {
       page: safePage,
       pageSize: safeSize,
@@ -169,12 +185,14 @@ async function getPublicBlogBySlug(dsaId, slug) {
     status: 'PUBLISHED',
   }).lean();
   if (!blog) return null;
+  const card = publicBlogCard(blog);
   return {
     title: blog.title,
     slug: blog.slug,
     shortDescription: blog.shortDescription || '',
     content: blog.content || '',
-    featuredImageUrl: blog.featuredImageUrl || '',
+    featuredImageUrl: card.featuredImageUrl,
+    images: card.images,
     publishDate: blog.publishDate,
     seoTitle: blog.seoTitle || '',
     seoDescription: blog.seoDescription || '',

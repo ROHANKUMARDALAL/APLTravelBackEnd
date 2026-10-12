@@ -28,6 +28,16 @@ async function checkoutTransfer(dto, context = {}) {
     dsaId: context.tenant?.dsaId || null,
     serviceCode: 'transfer',
   });
+  if (context.couponCode) {
+    const { loadEngineCoupon } = require('../../pricing/services/coupon.service');
+    const loaded = await loadEngineCoupon({
+      dsaId: context.tenant?.dsaId,
+      serviceCode: 'transfer',
+      code: context.couponCode,
+      customerId: context.userId,
+    });
+    pricingContext.coupon = loaded.input;
+  }
 
   // Prefer internal supplier price when present (revalidate/details may still hold it
   // on unsanitized Search docs). Public path uses customer price already priced.

@@ -162,11 +162,24 @@ function validateFlightLookup(body, { requireFareId = false } = {}) {
 
 function parseAddonCodes(value, field, details) {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.some((code) => typeof code !== 'string' || !code.trim())) {
-    details.push(`${field} must be an array of code strings`);
+  if (!Array.isArray(value)) {
+    details.push(`${field} must be an array`);
     return [];
   }
-  return value.map((code) => code.trim());
+  return value.map((entry, index) => {
+    if (typeof entry === 'string' && entry.trim()) {
+      return { code: entry.trim(), passengerKey: null, segmentKey: null };
+    }
+    if (entry && typeof entry === 'object' && typeof entry.code === 'string' && entry.code.trim()) {
+      return {
+        code: entry.code.trim(),
+        passengerKey: entry.passengerKey ? String(entry.passengerKey) : null,
+        segmentKey: entry.segmentKey ? String(entry.segmentKey) : null,
+      };
+    }
+    details.push(`${field}[${index}] must be a supplier code`);
+    return null;
+  }).filter(Boolean);
 }
 
 function parseConfirmPrice(body, details, what) {
@@ -269,6 +282,7 @@ function validateCheckoutBody(body) {
       nationality: t.nationality || 'IN',
       passportNumber: t.passportNumber,
       passportExpiry: t.passportExpiry,
+      passengerKey: t.passengerKey ? String(t.passengerKey) : null,
     })),
   };
 }
