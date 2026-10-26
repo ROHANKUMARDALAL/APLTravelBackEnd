@@ -43,7 +43,12 @@ function consolidateOffers(clusters, pricingContext = null) {
         bedType: member.bedType || null,
         occupancy: member.occupancy || { maxAdults: 2, maxChildren: 0 },
         mealPlan: member.mealPlan,
-        cancellation: { refundable: member.refundable },
+        cancellation: {
+          refundable: member.refundable,
+          summary: member.refundable
+            ? 'Mock rule: free cancellation until 24 hours before check-in.'
+            : 'Mock rule: this rate is non-refundable.',
+        },
         price: priced.customerPrice,
         supplier: member.supplier,
         supplierOfferId: member.supplierOfferId,
@@ -70,6 +75,8 @@ function consolidateOffers(clusters, pricingContext = null) {
         longitude: cluster.canonical.longitude,
       },
       starRating: cluster.canonical.starRating,
+      amenities: cluster.canonical.amenities || [],
+      image: cluster.canonical.image || null,
       phone: cluster.canonical.phone,
       supplierMappings: Array.from(mappingsMap.values()),
       availableRoomCount: availableRooms.length,

@@ -26,6 +26,7 @@ const {
   getBusBookingDetails,
   cancelBusBooking,
 } = require('../services/bus-booking.service');
+const { changeBusPoints } = require('../services/bus-point-change.service');
 const {
   validateBusSearchBody,
   parseFailureHeader,
@@ -53,6 +54,8 @@ router.post(
   '/search',
   optionalLogin,
   asyncHandler(async (req, res) => {
+    req.logService = 'BUS';
+    req.businessOperation = 'SEARCH';
     const dto = validateBusSearchBody(req.body);
     const forced = parseFailureHeader(req.header('x-simulate-supplier-failure'));
     const result = await searchBuses(
@@ -66,12 +69,17 @@ router.post(
       },
     );
     const publicResult = sanitizeBusSearchForPublic(result);
+    req.businessOperation = 'SEARCH';
+    req.searchId = result.searchId;
+    req.journeyId = result.searchId;
     await logPublicSearchResult({
       requestId: req.requestId,
       dsaId: req.tenant?.dsaId,
       userId: req.user?._id,
       service: 'BUS',
       searchId: result.searchId,
+      journeyId: result.searchId,
+      businessOperation: 'SEARCH',
       payload: publicResult,
     });
     return sendSuccess(res, publicResult);
@@ -81,34 +89,52 @@ router.post(
 router.post(
   '/details',
   asyncHandler(async (req, res) => {
+    req.logService = 'BUS';
+    req.businessOperation = 'DETAILS';
+    req.searchId = req.body?.searchId;
+    req.journeyId = req.body?.searchId;
     const dto = validateBusLookupBody(req.body);
-    return sendSuccess(res, await getBusDetails(dto, { tenant: req.tenant }));
+    const details = await getBusDetails(dto, { tenant: req.tenant });
+    req.searchId = details.searchId || req.searchId;
+    req.journeyId = details.searchId || req.journeyId;
+    return sendSuccess(res, details);
   }),
 );
 
 router.post(
   '/revalidate',
   asyncHandler(async (req, res) => {
+    req.logService = 'BUS';
+    req.businessOperation = 'RECHECK';
+    req.searchId = req.body?.searchId;
+    req.journeyId = req.body?.searchId;
     const dto = validateBusLookupBody(req.body);
-    return sendSuccess(
-      res,
-      await revalidateBusOffer(dto, { tenant: req.tenant }),
-    );
+    const checked = await revalidateBusOffer(dto, {
+      tenant: req.tenant,
+      supplier: req.body?.supplier || null,
+    });
+    req.searchId = checked.searchId || req.searchId;
+    req.journeyId = checked.searchId || req.journeyId;
+    return sendSuccess(res, checked);
   }),
 );
 
 router.post(
   '/checkout',
   asyncHandler(async (req, res) => {
+    req.logService = 'BUS';
+    req.businessOperation = 'CHECKOUT';
+    req.searchId = req.body?.searchId;
+    req.journeyId = req.body?.searchId;
     const dto = validateBusCheckoutBody(req.body);
-    return sendSuccess(
-      res,
-      await checkoutBus(dto, {
-        tenant: req.tenant,
-        requestId: req.requestId,
-        couponCode: req.body?.couponCode,
-      }),
-    );
+    const session = await checkoutBus(dto, {
+      tenant: req.tenant,
+      requestId: req.requestId,
+      couponCode: req.body?.couponCode,
+    });
+    req.searchId = session.searchId || req.searchId;
+    req.journeyId = session.journeyId || session.searchId || req.journeyId;
+    return sendSuccess(res, session);
   }),
 );
 
@@ -116,14 +142,18 @@ router.post(
   '/book',
   requireLogin,
   asyncHandler(async (req, res) => {
+    req.logService = 'BUS';
+    req.businessOperation = 'BOOK';
+    req.searchId = req.body?.searchId;
     const dto = validateBusBookBody(req.body);
-    return sendSuccess(
-      res,
-      await bookBus(dto, req.user, {
-        tenant: req.tenant,
-        requestId: req.requestId,
-      }),
-    );
+    const booked = await bookBus(dto, req.user, {
+      tenant: req.tenant,
+      requestId: req.requestId,
+    });
+    req.businessOperation = 'BOOK';
+    req.searchId = booked.searchId || req.body?.searchId;
+    req.journeyId = booked.journeyId || booked.searchId || req.body?.searchId;
+    return sendSuccess(res, booked);
   }),
 );
 
@@ -148,6 +178,23 @@ router.post(
         tenant: req.tenant,
       }),
     );
+  }),
+);
+
+router.post(
+  '/bookings/points',
+  requireLogin,
+  asyncHandler(async (req, res) => {
+    req.logService = 'BUS';
+    req.businessOperation = 'POINT_CHANGE';
+    const changed = await changeBusPoints(req.body || {}, req.user, {
+      tenant: req.tenant,
+      requestId: req.requestId,
+      request: req,
+    });
+    req.searchId = changed.searchId;
+    req.journeyId = changed.journeyId || changed.searchId;
+    return sendSuccess(res, changed);
   }),
 );
 

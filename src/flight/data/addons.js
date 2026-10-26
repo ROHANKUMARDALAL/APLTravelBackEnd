@@ -5,9 +5,10 @@ function flightAddOnCatalog(currency = 'INR') {
   const price = (amount) => ({ amount, currency });
   return {
     seats: [
-      { code: '12A', label: 'Seat 12A', price: price(450) },
-      { code: '12C', label: 'Seat 12C', price: price(450) },
-      { code: '14F', label: 'Seat 14F', price: price(650) },
+      { code: '12A', label: 'Seat 12A', status: 'AVAILABLE', price: price(450) },
+      { code: '12B', label: 'Seat 12B', status: 'OCCUPIED', price: price(450) },
+      { code: '12C', label: 'Seat 12C', status: 'AVAILABLE', price: price(450) },
+      { code: '14F', label: 'Seat 14F', status: 'AVAILABLE', price: price(650) },
     ],
     baggage: [
       { code: 'BG15', label: 'Extra 15 kg', price: price(1200) },

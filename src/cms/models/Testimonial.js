@@ -12,6 +12,7 @@ const TestimonialSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     customerName: { type: String, required: true, trim: true, maxlength: 160 },
     designation: { type: String, trim: true, default: '', maxlength: 160 },
     company: { type: String, trim: true, default: '', maxlength: 160 },

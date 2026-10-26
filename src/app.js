@@ -27,6 +27,8 @@ const travellersRoutes = require('./user/routes/travellers.routes');
 const aplAdminRoutes = require('./apl-admin/routes');
 const dsaAdminRoutes = require('./dsa-admin/routes');
 const publicSiteRoutes = require('./public-site/routes/site.routes');
+const holidayRoutes = require('./holiday/routes/holiday.routes');
+const enquiryRoutes = require('./holiday/routes/enquiry.routes');
 const { sendSuccess } = require('./common/response/envelope');
 
 /**
@@ -103,10 +105,14 @@ function createApp(options = {}) {
   app.use(`/${config.apiPrefix}/flights`, flightsRoutes);
   app.use(`/${config.apiPrefix}/buses`, busesRoutes);
   app.use(`/${config.apiPrefix}/transfers`, transfersRoutes);
+  app.use(`/${config.apiPrefix}/insurance`, require('./insurance/routes/insurance.routes'));
   app.use(`/${config.apiPrefix}/auth`, authRoutes);
   app.use(`/${config.apiPrefix}/account`, accountRoutes);
   app.use(`/${config.apiPrefix}/travellers`, travellersRoutes);
   app.use(`/${config.apiPrefix}/bookings`, bookingsRoutes);
+  app.use(`/${config.apiPrefix}/holidays`, holidayRoutes);
+  app.use(`/${config.apiPrefix}/enquiries`, enquiryRoutes);
+  app.use(`/${config.apiPrefix}/recharge`, require('./recharge/routes/recharge.routes'));
 
   // Local/dev media. DSAAdmin writes into its own uploads folder; this serves that file too.
   app.use('/media', (req, res, next) => {

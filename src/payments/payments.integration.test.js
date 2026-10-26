@@ -293,6 +293,12 @@ describeDb('Phase 13 payments cancellation refunds', () => {
     const chargedAmount = checkout.json.data.pricing.amount;
     const chargedCurrency = checkout.json.data.pricing.currency;
 
+    const blocked = await httpJson(port, 'POST', '/api/v1/flights/block', {
+      headers: tenantHeaders(host, { Authorization: `Bearer ${token}` }),
+      body: { checkoutToken },
+    });
+    assert.equal(blocked.status, 200, JSON.stringify(blocked.json));
+
     const book = await httpJson(port, 'POST', '/api/v1/flights/book', {
       headers: tenantHeaders(host, { Authorization: `Bearer ${token}` }),
       body: {

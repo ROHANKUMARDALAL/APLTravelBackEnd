@@ -75,6 +75,25 @@ function geoBucket(lat, lng) {
   return `${latBucket.toFixed(3)}:${lngBucket.toFixed(3)}`;
 }
 
+const HOTEL_IMAGES = [
+  'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1551882547-ff40c63fe5fa?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?auto=format&fit=crop&w=900&q=80',
+  'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=900&q=80',
+];
+
+function hotelImage(name) {
+  const total = String(name || '').split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return HOTEL_IMAGES[total % HOTEL_IMAGES.length];
+}
+
+function defaultAmenities(starRating) {
+  const amenities = ['Wi-Fi', 'Air conditioning'];
+  if (Number(starRating) >= 4) amenities.push('Restaurant', 'Room service');
+  if (Number(starRating) >= 5) amenities.push('Pool', 'Airport shuttle');
+  return amenities;
+}
+
 function normalizeCandidate(candidate) {
   const normalizedName = normalizeName(candidate.name);
   return {
@@ -83,6 +102,10 @@ function normalizeCandidate(candidate) {
     city: candidate.city.trim(),
     country: candidate.country.trim(),
     mealPlan: normalizeMealPlan(candidate.mealPlan),
+    amenities: Array.isArray(candidate.amenities) && candidate.amenities.length
+      ? candidate.amenities
+      : defaultAmenities(candidate.starRating),
+    image: candidate.image || hotelImage(candidate.name),
     fingerprints: {
       normalizedName,
       nameTokens: tokenizeName(normalizedName),

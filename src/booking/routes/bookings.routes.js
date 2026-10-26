@@ -33,6 +33,7 @@ router.post(
         customerId,
         searchId: req.body.searchId,
         offerId: req.body.offerId,
+        passengers: req.body.passengers,
       });
       return sendSuccess(res, {
         coupon: {
@@ -61,6 +62,59 @@ router.post(
         exclusive: loaded.coupon.exclusive,
       },
     });
+  }),
+);
+
+router.post(
+  '/payment-fee',
+  requireTransactionTenant,
+  asyncHandler(async (req, res) => {
+    const { quotePaymentFee } = require('../../payments/payment-method-fee');
+    const { writeLifecycleLog } = require('../../common/services/lifecycle-log.service');
+    const { resolveChargeAmount } = require('../../payments/services/payment.service');
+    const CheckoutSession = require('../../common/database/models/CheckoutSession');
+    let base = Number(req.body?.amount);
+    let currency = String(req.body?.currency || 'INR').toUpperCase();
+    if (req.body?.checkoutToken) {
+      const session = await CheckoutSession.findOne({ checkoutToken: req.body.checkoutToken });
+      if (!session) throw AppError.validation('Invalid checkoutToken');
+      if (session.status === 'PAYING' || session.status === 'BOOKED') {
+        throw AppError.validation('Payment method cannot be changed for this checkout');
+      }
+      const baseCharge = resolveChargeAmount(session);
+      if (req.body?.amount != null && Number(req.body.amount) !== baseCharge.amount) {
+        throw AppError.validation('Payment amount does not match the checkout', [
+          { requiredAmount: baseCharge.amount, providedAmount: Number(req.body.amount) },
+        ]);
+      }
+      base = baseCharge.amount;
+      currency = baseCharge.currency;
+    }
+    let quote;
+    try {
+      quote = quotePaymentFee(base, req.body?.method);
+    } catch (error) {
+      throw AppError.validation(error.message || 'Unsupported payment method');
+    }
+    await writeLifecycleLog({
+      stage: 'FEE_RECALCULATED',
+      service: String(req.body?.service || 'CHECKOUT').toUpperCase(),
+      operation: 'PAYMENT_FEE',
+      businessOperation: 'PAYMENT',
+      direction: 'INBOUND',
+      requestId: req.requestId,
+      dsaId: req.tenant?.dsaId,
+      userId: req.user?._id,
+      status: 'SUCCESS',
+      request: {
+        method: req.body?.method,
+        amount: base,
+        currency,
+        checkoutToken: req.body?.checkoutToken || null,
+      },
+      result: quote,
+    });
+    return sendSuccess(res, { currency, ...quote });
   }),
 );
 

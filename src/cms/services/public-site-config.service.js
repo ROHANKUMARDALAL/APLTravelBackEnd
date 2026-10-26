@@ -11,6 +11,8 @@ const Testimonial = require('../models/Testimonial');
 const FooterLink = require('../models/FooterLink');
 const CmsPage = require('../models/CmsPage');
 const Banner = require('../models/Banner');
+const User = require('../../user/models/User');
+const DsaCustomerMembership = require('../../customer/models/DsaCustomerMembership');
 const {
   listOfferedServicesForDsa,
 } = require('../../tenant/services/service-offer.service');
@@ -51,6 +53,32 @@ function publicBranding(settings) {
     faviconUrl: settings?.faviconUrl || '',
     primaryColor: settings?.primaryColor || '',
   };
+}
+
+async function publicTestimonials(dsaId, rows) {
+  const ids = rows.map((row) => row.customerId).filter(Boolean);
+  const memberships = ids.length
+    ? await DsaCustomerMembership.find({
+      dsaId,
+      userId: { $in: ids },
+      status: { $ne: 'REMOVED' },
+    }).select('userId').lean()
+    : [];
+  const allowed = memberships.map((row) => row.userId);
+  const users = allowed.length
+    ? await User.find({ _id: { $in: allowed } }).select('name profilePhoto').lean()
+    : [];
+  const byId = new Map(users.map((user) => [String(user._id), user]));
+  return rows.map((row) => {
+    const customer = row.customerId ? byId.get(String(row.customerId)) : null;
+    return {
+      customerName: customer?.name || row.customerName,
+      message: row.message,
+      rating: row.rating,
+      imageUrl: customer ? (customer.profilePhoto || '') : (row.imageUrl || ''),
+      displayOrder: row.displayOrder,
+    };
+  });
 }
 
 async function buildPublicSiteConfig(dsa) {
@@ -116,6 +144,7 @@ async function buildPublicSiteConfig(dsa) {
       slug: s.slug,
       icon: s.icon || s.code,
       displayOrder: s.displayOrder,
+      serviceMode: s.serviceMode || '',
     })),
     footer: footerLinks.map((f) => ({
       title: f.title,
@@ -123,15 +152,7 @@ async function buildPublicSiteConfig(dsa) {
       group: f.group,
       displayOrder: f.displayOrder,
     })),
-    testimonials: testimonials.map((t) => ({
-      customerName: t.customerName,
-      designation: t.designation || '',
-      company: t.company || '',
-      message: t.message,
-      rating: t.rating,
-      imageUrl: t.imageUrl || '',
-      displayOrder: t.displayOrder,
-    })),
+    testimonials: await publicTestimonials(dsaId, testimonials),
     pages: pages.map((p) => ({
       title: p.title,
       slug: p.slug,

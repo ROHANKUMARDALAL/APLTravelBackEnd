@@ -12,7 +12,7 @@ const CheckoutSessionSchema = new mongoose.Schema(
     checkoutToken: { type: String, required: true, unique: true, index: true },
     productType: {
       type: String,
-      enum: ['FLIGHT', 'HOTEL', 'BUS', 'TRANSFER'],
+      enum: ['FLIGHT', 'HOTEL', 'BUS', 'TRANSFER', 'INSURANCE'],
       required: true,
     },
     searchId: { type: String, required: true, index: true },
@@ -25,6 +25,10 @@ const CheckoutSessionSchema = new mongoose.Schema(
       index: true,
     },
     requestId: { type: String },
+    journeyId: { type: String, index: true },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    /** Accepted supplier block. Payment is refused without a current block. */
+    block: { type: mongoose.Schema.Types.Mixed },
     status: {
       type: String,
       enum: [

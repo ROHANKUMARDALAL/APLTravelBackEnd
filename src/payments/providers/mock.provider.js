@@ -61,7 +61,11 @@ const mockPaymentProvider = {
       };
     }
     if (m === 'UPI') {
-      if (!instrument.upiId || !String(instrument.upiId).includes('@')) {
+      // The checkout screen does not collect a VPA. A missing id is the mock
+      // approval flow. An explicit id must look like a VPA, and fail@aplmock
+      // is the development failure control.
+      const upiId = String(instrument.upiId || 'traveller@aplmock').trim();
+      if (!upiId.includes('@') || upiId.toLowerCase() === 'fail@aplmock') {
         return {
           ok: false,
           status: PaymentStatus.FAILED,

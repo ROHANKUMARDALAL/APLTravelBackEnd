@@ -56,6 +56,16 @@ const mockBusBAdapter = {
       rawPayload: { mock: true, supplier: 'MOCKBUS_B', count: buses.length },
     };
   },
+
+  async changePoints(request) {
+    return {
+      accepted: true,
+      mock: true,
+      supplier: 'MOCKBUS_B',
+      boardingPointCode: request.boardingPointCode,
+      droppingPointCode: request.droppingPointCode,
+    };
+  },
 };
 
 module.exports = { mockBusBAdapter };

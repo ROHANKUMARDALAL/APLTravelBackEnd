@@ -2,6 +2,7 @@
 
 const { delay, normalizeIata } = require('../mock.helpers');
 const { getMockTboFlights } = require('../../data/mock-tbo-flights');
+const { mockFlightOperations } = require('../mock-flight-operations');
 
 const mockTboFlightAdapter = {
   code: 'TBO',
@@ -51,6 +52,13 @@ const mockTboFlightAdapter = {
       rawPayload: { mock: true, supplier: 'TBO', flights },
     };
   },
+
+  fareQuote: mockFlightOperations.fareQuote,
+  getSsr: mockFlightOperations.getSsr,
+  blockFlight: mockFlightOperations.blockFlight,
+  bookFlight: mockFlightOperations.bookFlight,
+  retrieveBooking: mockFlightOperations.retrieveBooking,
+  cancelBooking: mockFlightOperations.cancelBooking,
 };
 
 module.exports = { mockTboFlightAdapter };

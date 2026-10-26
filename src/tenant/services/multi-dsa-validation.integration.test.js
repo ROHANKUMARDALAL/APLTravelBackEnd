@@ -173,7 +173,10 @@ describeDb('Phase 15C multi-DSA onboarding & isolation', () => {
       await User.deleteMany({ email: { $in: emails } });
       await DsaAdminUser.deleteMany({ email: { $in: emails } });
     }
-    await AplAdminSession.deleteMany({});
+    const aplUsers = await AplAdminUser.find({ email: { $in: emails } }).select('_id');
+    await AplAdminSession.deleteMany({
+      userId: { $in: aplUsers.map((user) => user._id) },
+    });
     await disconnectDatabase();
   });
 

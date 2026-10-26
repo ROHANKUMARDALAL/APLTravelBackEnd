@@ -1,6 +1,7 @@
 'use strict';
 
-const { AppError } = require('../../common/errors/app-error');
+const mongoose = require('mongoose');
+const { AppError, ErrorCode } = require('../../common/errors/app-error');
 const { config } = require('../../common/config');
 const Dsa = require('../../tenant/models/Dsa');
 const {
@@ -40,7 +41,17 @@ function extractRequestHost(req) {
   return normalizeHost(hostHeader);
 }
 
+function assertDatabaseReady() {
+  const state = mongoose.connection.readyState;
+  if (state === 0 || state === 3) {
+    throw new AppError(ErrorCode.DATABASE_UNAVAILABLE, 'Database is not available', {
+      httpStatus: 503,
+    });
+  }
+}
+
 async function findDsaByCode(dsaCode) {
+  assertDatabaseReady();
   if (!dsaCode) return null;
   return Dsa.findOne({
     dsaCode: String(dsaCode).toUpperCase(),
@@ -64,6 +75,7 @@ function subdomainFromHost(host) {
 }
 
 async function findDsaForHost(host) {
+  assertDatabaseReady();
   for (const candidate of domainLookupCandidates(host)) {
     const byDomain = await Dsa.findOne({
       $or: [{ domain: candidate }, { customDomains: candidate }],

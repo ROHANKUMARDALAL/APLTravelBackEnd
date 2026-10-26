@@ -20,7 +20,11 @@ function serviceFromPath(path) {
   if (path.includes('/transfers')) return 'TRANSFER';
   if (path.includes('/buses')) return 'BUS';
   if (path.includes('/hotels')) return 'HOTEL';
+  if (path.includes('/insurance')) return 'INSURANCE';
   if (path.includes('/flights')) return 'FLIGHT';
+  if (path.includes('/recharge')) return 'RECHARGE';
+  if (path.includes('/holidays')) return 'HOLIDAY';
+  if (path.includes('/enquiries')) return 'ENQUIRY';
   if (path.includes('/auth')) return 'AUTH';
   if (path.includes('/account')) return 'ACCOUNT';
   if (path.includes('/bookings')) return 'BOOKING';
@@ -38,11 +42,17 @@ async function logSupplierOutcomes({
   searchId,
   userRequest,
   settled,
+  journeyId,
+  parentJourneyId,
+  businessOperation,
 }) {
   await Promise.all(
     settled.map(async ({ adapter, outcome, supplierId }) => {
       const base = {
         requestId,
+        journeyId,
+        parentJourneyId,
+        businessOperation,
         dsaId,
         userId,
         service,
@@ -57,8 +67,8 @@ async function logSupplierOutcomes({
         ...base,
         stage: 'SUPPLIER_REQUEST',
         direction: 'SUPPLIER',
-        status: 'SUCCESS',
-        httpStatus: 200,
+        status: outcome.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED',
+        httpStatus: outcome.status === 'SUCCESS' ? 200 : 502,
         durationMs: 0,
         storeRaw: true,
         rawPayload: outcome.supplierRequest || userRequest || {},

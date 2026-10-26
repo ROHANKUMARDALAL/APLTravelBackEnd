@@ -1,6 +1,7 @@
 'use strict';
 
 const { formatAplLocationId } = require('../services/location.service');
+const { attachMockStops } = require('./mock-points');
 
 function cityKey(name) {
   return String(name || '')
@@ -100,12 +101,12 @@ function getMockBusAInventory(criteria = {}) {
           fareAmount: 1599,
           currency: 'INR',
           boardingPoints: [
-            { code: 'KG-1', name: 'Kashmere Gate ISBT', timeOffsetMinutes: 0 },
-            { code: 'SK-1', name: 'Sarai Kale Khan', timeOffsetMinutes: 40 },
+            { code: 'KG-1', name: 'Kashmere Gate ISBT', timeOffsetMinutes: 0, address: 'Kashmere Gate ISBT, New Delhi', landmark: 'Platform 4' },
+            { code: 'SK-1', name: 'Sarai Kale Khan', timeOffsetMinutes: 40, address: 'Sarai Kale Khan ISBT, New Delhi', landmark: 'Bus bay 12' },
           ],
           droppingPoints: [
-            { code: 'DDR-1', name: 'Dadar TT', timeOffsetMinutes: 0 },
-            { code: 'BKC-1', name: 'BKC Drop', timeOffsetMinutes: 25 },
+            { code: 'DDR-1', name: 'Dadar TT', timeOffsetMinutes: 0, address: 'Dadar TT, Mumbai', landmark: 'East exit' },
+            { code: 'BKC-1', name: 'BKC Drop', timeOffsetMinutes: 25, address: 'Bandra Kurla Complex, Mumbai', landmark: 'MMRDA ground' },
           ],
         },
       ],
@@ -117,8 +118,7 @@ function getMockBusAInventory(criteria = {}) {
   );
   if (!matched) {
     // Generic fallback so arbitrary cities still return deterministic results.
-    return [
-      {
+    return [attachMockStops({
         supplierServiceId: `MBA-GEN-${origin || 'x'}-${destination || 'y'}-0900`,
         operator: 'Mock Coach Lines',
         busType: 'Standard',
@@ -134,17 +134,16 @@ function getMockBusAInventory(criteria = {}) {
         originCity: criteria.origin?.name || criteria.originCity,
         destinationCity: criteria.destination?.name || criteria.destinationCity,
         boardingPoints: [
-          { code: 'CT-1', name: 'Central Terminal', timeOffsetMinutes: 0 },
+          { code: 'CT-1', name: 'Central Terminal', timeOffsetMinutes: 0, address: 'Central Terminal', landmark: 'Main gate' },
         ],
         droppingPoints: [
-          { code: 'CD-1', name: 'City Depot', timeOffsetMinutes: 0 },
+          { code: 'CD-1', name: 'City Depot', timeOffsetMinutes: 0, address: 'City Depot', landmark: 'Arrival bay' },
         ],
         travelDate,
-      },
-    ];
+    })];
   }
 
-  return matched.services.map((svc) => ({
+  return matched.services.map((svc) => attachMockStops({
     ...svc,
     originCity: criteria.origin?.name || criteria.originCity,
     destinationCity: criteria.destination?.name || criteria.destinationCity,

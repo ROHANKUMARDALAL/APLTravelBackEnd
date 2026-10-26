@@ -2,6 +2,7 @@
 
 const { delay, normalizeIata } = require('../mock.helpers');
 const { getMockTripjackFlights } = require('../../data/mock-tripjack-flights');
+const { mockFlightOperations } = require('../mock-flight-operations');
 
 const mockTripjackFlightAdapter = {
   code: 'TRIPJACK',
@@ -51,6 +52,13 @@ const mockTripjackFlightAdapter = {
       rawPayload: { mock: true, supplier: 'TRIPJACK', flights },
     };
   },
+
+  fareQuote: mockFlightOperations.fareQuote,
+  getSsr: mockFlightOperations.getSsr,
+  blockFlight: mockFlightOperations.blockFlight,
+  bookFlight: mockFlightOperations.bookFlight,
+  retrieveBooking: mockFlightOperations.retrieveBooking,
+  cancelBooking: mockFlightOperations.cancelBooking,
 };
 
 module.exports = { mockTripjackFlightAdapter };

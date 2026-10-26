@@ -84,6 +84,109 @@ const CITIES = [
       },
     ],
   },
+  {
+    cityCode: 'MAA',
+    cityName: 'Chennai',
+    country: 'India',
+    countryIso2: 'IN',
+    aliases: ['chennai', 'madras', 'maa'],
+    airports: [
+      {
+        airportCode: 'MAA',
+        airportName: 'Chennai International Airport',
+        shortName: 'Chennai',
+        area: 'Meenambakkam',
+        isPrimary: true,
+      },
+    ],
+  },
+  {
+    cityCode: 'CCU',
+    cityName: 'Kolkata',
+    country: 'India',
+    countryIso2: 'IN',
+    aliases: ['kolkata', 'calcutta', 'ccu'],
+    airports: [
+      {
+        airportCode: 'CCU',
+        airportName: 'Netaji Subhas Chandra Bose International Airport',
+        shortName: 'Kolkata',
+        area: 'Dum Dum',
+        isPrimary: true,
+      },
+    ],
+  },
+  {
+    cityCode: 'GOI',
+    cityName: 'Goa',
+    country: 'India',
+    countryIso2: 'IN',
+    aliases: ['goa', 'dabolim', 'mopa', 'goi'],
+    airports: [
+      {
+        airportCode: 'GOI',
+        airportName: 'Dabolim Airport',
+        shortName: 'Dabolim',
+        area: 'Dabolim',
+        isPrimary: true,
+      },
+      {
+        airportCode: 'GOX',
+        airportName: 'Manohar International Airport',
+        shortName: 'Mopa',
+        area: 'Mopa',
+        isPrimary: false,
+      },
+    ],
+  },
+  {
+    cityCode: 'COK',
+    cityName: 'Kochi',
+    country: 'India',
+    countryIso2: 'IN',
+    aliases: ['kochi', 'cochin', 'cok'],
+    airports: [
+      {
+        airportCode: 'COK',
+        airportName: 'Cochin International Airport',
+        shortName: 'CIAL',
+        area: 'Nedumbassery',
+        isPrimary: true,
+      },
+    ],
+  },
+  {
+    cityCode: 'DXB',
+    cityName: 'Dubai',
+    country: 'United Arab Emirates',
+    countryIso2: 'AE',
+    aliases: ['dubai', 'dxb'],
+    airports: [
+      {
+        airportCode: 'DXB',
+        airportName: 'Dubai International Airport',
+        shortName: 'Dubai',
+        area: 'Garhoud',
+        isPrimary: true,
+      },
+    ],
+  },
+  {
+    cityCode: 'LHR',
+    cityName: 'London',
+    country: 'United Kingdom',
+    countryIso2: 'GB',
+    aliases: ['london', 'heathrow', 'lhr'],
+    airports: [
+      {
+        airportCode: 'LHR',
+        airportName: 'London Heathrow Airport',
+        shortName: 'Heathrow',
+        area: 'Hillingdon',
+        isPrimary: true,
+      },
+    ],
+  },
 ];
 
 /** True when every typed letter appears in order, e.g. mba → Mumbai, BOM → BOM. */
@@ -187,7 +290,10 @@ function searchAirports({ query, cityCode } = {}) {
     const cityHit = fieldMatchesQuery(cityFields, q);
 
     const matchingAirports = city.airports.filter((airport) =>
-      fieldMatchesQuery([airport.airportCode, city.cityName, ...city.aliases], q),
+      fieldMatchesQuery(
+        [airport.airportCode, airport.airportName, city.cityName, ...city.aliases],
+        q,
+      ),
     );
 
     if (cityHit || matchingAirports.length > 0) {

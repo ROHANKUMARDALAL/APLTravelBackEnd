@@ -1,6 +1,7 @@
 'use strict';
 
 const { formatAplLocationId } = require('../services/location.service');
+const { attachMockStops } = require('./mock-points');
 
 function cityKey(name) {
   return String(name || '')
@@ -102,10 +103,10 @@ function getMockBusBInventory(criteria = {}) {
           fareAmount: 1299,
           currency: 'INR',
           boardingPoints: [
-            { code: 'AV-1', name: 'Anand Vihar ISBT', timeOffsetMinutes: 0 },
+            { code: 'AV-1', name: 'Anand Vihar ISBT', timeOffsetMinutes: 0, address: 'Anand Vihar ISBT, Delhi', landmark: 'Metro exit' },
           ],
           droppingPoints: [
-            { code: 'BOR-1', name: 'Borivali East', timeOffsetMinutes: 0 },
+            { code: 'BOR-1', name: 'Borivali East', timeOffsetMinutes: 0, address: 'Borivali East, Mumbai', landmark: 'Station road' },
           ],
         },
       ],
@@ -116,8 +117,7 @@ function getMockBusBInventory(criteria = {}) {
     (row) => row.match[0] === origin && row.match[1] === destination,
   );
   if (!matched) {
-    return [
-      {
+    return [attachMockStops({
         supplierServiceId: `MBB-GEN-${origin || 'x'}-${destination || 'y'}-1100`,
         operator: 'Alt Route Buses',
         busType: 'Standard',
@@ -133,17 +133,16 @@ function getMockBusBInventory(criteria = {}) {
         originCity: criteria.origin?.name || criteria.originCity,
         destinationCity: criteria.destination?.name || criteria.destinationCity,
         boardingPoints: [
-          { code: 'MS-1', name: 'Main Stand', timeOffsetMinutes: 0 },
+          { code: 'MS-1', name: 'Main Stand', timeOffsetMinutes: 0, address: 'Main Stand', landmark: 'Bay 1' },
         ],
         droppingPoints: [
-          { code: 'AS-1', name: 'Arrival Stand', timeOffsetMinutes: 0 },
+          { code: 'AS-1', name: 'Arrival Stand', timeOffsetMinutes: 0, address: 'Arrival Stand', landmark: 'Bay A' },
         ],
         travelDate,
-      },
-    ];
+    })];
   }
 
-  return matched.services.map((svc) => ({
+  return matched.services.map((svc) => attachMockStops({
     ...svc,
     originCity: criteria.origin?.name || criteria.originCity,
     destinationCity: criteria.destination?.name || criteria.destinationCity,

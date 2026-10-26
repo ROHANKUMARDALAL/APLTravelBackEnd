@@ -6,6 +6,14 @@ const Coupon = require('../models/Coupon');
 const CouponRedemption = require('../models/CouponRedemption');
 const { Booking } = require('../../common/database/models/Booking');
 const { createPricingContext, calculatePrice } = require('./pricing-engine.service');
+const { toMinor, toMajor, percentOfMinor } = require('../money');
+
+const FARE_FAMILY_MULTIPLIER = {
+  SAVER: 1,
+  PUBLISH: 1.08,
+  FLEXI: 1.18,
+  CORPORATE: 1.26,
+};
 
 const MESSAGES = {
   INVALID: 'Invalid coupon',
@@ -172,6 +180,80 @@ async function loadEngineCoupon({ dsaId, serviceCode, code, customerId }) {
   return { coupon, input: engineInput(coupon) };
 }
 
+function payingPassengers(request) {
+  const source = request?.passengers || request || {};
+  const adults = Number(source.adults ?? request?.adults ?? 1);
+  const children = Number(source.children ?? request?.children ?? 0);
+  return Math.max(1, (Number.isFinite(adults) ? adults : 1) + (Number.isFinite(children) ? children : 0));
+}
+
+function findFlightFare(results, offerId) {
+  const wanted = String(offerId || '');
+  if (!wanted) return null;
+  for (const flight of results?.flights || []) {
+    for (const fare of flight.flightFareData || []) {
+      if (String(fare.aplFareId) === wanted) return { flight, fare };
+    }
+  }
+  return null;
+}
+
+function familyUnitAmount(customerAmount, fareType) {
+  const multiplier = FARE_FAMILY_MULTIPLIER[String(fareType || 'SAVER').toUpperCase()] || 1;
+  return toMajor(Math.round(toMinor(customerAmount) * multiplier));
+}
+
+/**
+ * Coupon is applied once to the selected family total (unit × paying passengers).
+ * It is not priced against another family's supplier unit.
+ */
+function quoteFlightFamilyCoupon({ fare, priced, coupon, passengers = 1 }) {
+  const snap = priced.commercialSnapshot;
+  const currency = snap.currency || 'INR';
+  const computedUnit = familyUnitAmount(snap.finalPrice.amount, fare?.fareType);
+  const storedUnit = Number(fare?.price?.amount);
+  const unit = Number.isFinite(storedUnit) && storedUnit > 0 ? storedUnit : computedUnit;
+  const pax = Math.max(1, Number(passengers) || 1);
+  const grossMinor = toMinor(unit) * pax;
+  const floorMinor = (toMinor(snap.supplierPrice.amount) + toMinor(snap.aplMarkup.amount)) * pax;
+  const roomMinor = Math.max(0, grossMinor - floorMinor);
+  let couponMinor = 0;
+  let couponStatus = null;
+  if (coupon?.exclusive && Number(snap.discount?.amount) > 0) {
+    couponStatus = 'COUPON_CANNOT_COMBINE';
+  } else if (Number(coupon?.minAmount) > 0 && grossMinor < toMinor(coupon.minAmount)) {
+    couponStatus = 'COUPON_MINIMUM_NOT_MET';
+  } else if (
+    String(coupon?.adjustmentType || '').toUpperCase() !== 'PERCENTAGE'
+    && coupon?.currency
+    && String(coupon.currency).toUpperCase() !== String(currency).toUpperCase()
+  ) {
+    couponStatus = 'COUPON_NO_REMAINING_MARGIN';
+  } else {
+    const requested = String(coupon?.adjustmentType || '').toUpperCase() === 'PERCENTAGE'
+      ? percentOfMinor(grossMinor, coupon.value)
+      : toMinor(coupon?.value || 0);
+    const max = coupon?.maxAmount == null || coupon?.maxAmount === '' ? null : Number(coupon.maxAmount);
+    const capped = Number.isFinite(max) && max > 0 ? Math.min(requested, toMinor(max)) : requested;
+    couponMinor = Math.min(Math.max(0, capped), roomMinor, grossMinor);
+    couponStatus = couponMinor > 0 ? 'APPLIED' : 'COUPON_NO_REMAINING_MARGIN';
+  }
+  return {
+    currency,
+    passengers: pax,
+    unitAmount: toMajor(toMinor(unit)),
+    fare: toMajor(grossMinor),
+    additionalCharges: 0,
+    discount: 0,
+    couponSavings: toMajor(couponMinor),
+    couponAdjustmentType: coupon?.adjustmentType || null,
+    couponValue: coupon?.value ?? null,
+    couponMaxAmount: coupon?.maxAmount ?? null,
+    total: toMajor(grossMinor - couponMinor),
+    couponStatus,
+  };
+}
+
 function findSupplierPrice(serviceCode, results, offerId) {
   const wanted = offerId ? String(offerId) : '';
   const take = (price, id) => {
@@ -180,12 +262,12 @@ function findSupplierPrice(serviceCode, results, offerId) {
     return { amount: Number(price.amount), currency: price.currency || 'INR' };
   };
   if (serviceCode === 'flight') {
-    for (const flight of results?.flights || []) {
-      for (const fare of flight.flightFareData || []) {
-        const price = take(fare.supplierPrice, fare.aplFareId) || take(fare.supplierPrice, flight.aplFlightId);
-        if (price && (!wanted || fare.aplFareId === wanted || flight.aplFlightId === wanted)) return price;
-      }
+    const located = findFlightFare(results, wanted);
+    const price = located?.fare?.supplierPrice;
+    if (price && Number.isFinite(Number(price.amount))) {
+      return { amount: Number(price.amount), currency: price.currency || 'INR' };
     }
+    return null;
   }
   if (serviceCode === 'hotel') {
     for (const hotel of results?.hotels || []) {
@@ -218,16 +300,46 @@ function findSupplierPrice(serviceCode, results, offerId) {
   return null;
 }
 
-async function quoteStoredCoupon({ dsaId, serviceCode, code, customerId, searchId, offerId }) {
+async function quoteStoredCoupon({ dsaId, serviceCode, code, customerId, searchId, offerId, passengers }) {
   const Search = require('../../common/database/models/Search');
   const doc = await Search.findOne({
     aplSearchId: String(searchId || ''),
     ...(dsaId ? { dsaId } : {}),
   }).select('results request').lean();
   if (!doc) throw AppError.validation('Search again before applying this coupon');
+  const request = doc.request || {};
+  if (serviceCode === 'flight') {
+    const located = findFlightFare(doc.results, offerId);
+    if (!located?.fare?.supplierPrice) throw AppError.validation('This offer is no longer available');
+    const pricingContext = await createPricingContext({
+      dsaId,
+      serviceCode,
+      customerId,
+      tripType: request.tripType || null,
+      originCode: request.originCityCode || request.originCode || null,
+      destinationCode: request.destinationCityCode || request.destinationCode || null,
+    });
+    const priced = calculatePrice({
+      supplierPrice: located.fare.supplierPrice,
+      supplierCode: located.fare.supplier || null,
+      context: pricingContext,
+      includeInternal: true,
+    });
+    const coupon = await findCoupon(dsaId, serviceCode, code);
+    await assertEligible(coupon, { serviceCode, customerId });
+    const breakdown = quoteFlightFamilyCoupon({
+      fare: located.fare,
+      priced,
+      coupon,
+      passengers: Number(passengers) > 0 ? Number(passengers) : payingPassengers(request),
+    });
+    if (breakdown.couponStatus === 'COUPON_CANNOT_COMBINE') throw AppError.validation(MESSAGES.COMBINE);
+    if (breakdown.couponStatus === 'COUPON_MINIMUM_NOT_MET') throw AppError.validation(MESSAGES.MINIMUM);
+    if (breakdown.couponStatus === 'COUPON_NO_REMAINING_MARGIN') throw AppError.validation(MESSAGES.MARGIN);
+    return { coupon, priced, breakdown };
+  }
   const supplierPrice = findSupplierPrice(serviceCode, doc.results, offerId);
   if (!supplierPrice) throw AppError.validation('This offer is no longer available');
-  const request = doc.request || {};
   return priceWithCoupon({
     dsaId,
     serviceCode,
@@ -246,6 +358,10 @@ module.exports = {
   publicBreakdown,
   priceWithCoupon,
   quoteStoredCoupon,
+  quoteFlightFamilyCoupon,
+  findFlightFare,
+  payingPassengers,
+  FARE_FAMILY_MULTIPLIER,
   loadEngineCoupon,
   reserveCoupon,
   settleCoupon,

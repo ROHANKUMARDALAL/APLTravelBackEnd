@@ -1,5 +1,6 @@
 'use strict';
 
+const mongoose = require('mongoose');
 const ServiceLog = require('../database/models/ServiceLog');
 const SupplierRawPayload = require('../database/models/SupplierRawPayload');
 const { redact } = require('../utils/redact');
@@ -64,9 +65,22 @@ function stageToDirection(stage) {
  * Write one lifecycle stage record. Never throws to callers.
  */
 async function writeLifecycleLog(entry) {
+  if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
+    return null;
+  }
   try {
     const stage = entry.stage || 'INBOUND_REQUEST';
     const direction = entry.direction || stageToDirection(stage);
+    if (entry.requestId && !entry.supplierCode && (stage === 'INBOUND_REQUEST' || stage === 'OUTBOUND_RESPONSE' || stage === 'ERROR')) {
+      const priorStages = stage === 'INBOUND_REQUEST'
+        ? ['INBOUND_REQUEST', 'NORMALIZED_REQUEST']
+        : ['OUTBOUND_RESPONSE', 'NORMALIZED_RESPONSE', 'ERROR'];
+      const prior = await ServiceLog.exists({
+        requestId: entry.requestId,
+        stage: { $in: priorStages },
+      });
+      if (prior) return null;
+    }
     let payloadRef = entry.payloadRef || undefined;
     let request = entry.request;
     let supplierRequest = entry.supplierRequest;
@@ -110,6 +124,9 @@ async function writeLifecycleLog(entry) {
 
     await ServiceLog.create({
       requestId: entry.requestId || null,
+      journeyId: entry.journeyId || undefined,
+      parentJourneyId: entry.parentJourneyId || undefined,
+      businessOperation: entry.businessOperation || undefined,
       dsaId: entry.dsaId || undefined,
       userId: entry.userId || undefined,
       direction,
@@ -146,11 +163,13 @@ module.exports = {
   MAX_RAW_CHARS,
 };
 
-async function logPublicSearchResult({ requestId, dsaId, userId, service, searchId, payload }) {
+async function logPublicSearchResult({ requestId, dsaId, userId, service, searchId, payload, journeyId, businessOperation }) {
   await writeLifecycleLog({
     stage: 'NORMALIZED_RESPONSE',
     direction: 'INBOUND',
     requestId,
+    journeyId,
+    businessOperation,
     dsaId,
     userId,
     service,

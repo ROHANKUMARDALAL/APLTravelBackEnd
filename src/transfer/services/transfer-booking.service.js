@@ -1,5 +1,6 @@
 'use strict';
 
+const { AppError } = require('../../common/errors/app-error');
 const { assertExactPrice } = require('../../common/utils/price-confirm');
 const {
   getTransferDetails,
@@ -23,6 +24,13 @@ async function checkoutTransfer(dto, context = {}) {
 
   const transfer = details.transfer;
   const offer = details.selectedOffer;
+  if (dto.travellers.length > Number(transfer.maxPassengers || 8)) {
+    throw AppError.validation(`This cab seats ${transfer.maxPassengers} passengers`);
+  }
+  const points = offer.pickupPoints || transfer.pickupPoints || [];
+  if (points.length && !points.some((point) => point.code === dto.pickupPoint?.code)) {
+    throw AppError.validation('Select a pickup point offered for this cab');
+  }
 
   const pricingContext = await createPricingContext({
     dsaId: context.tenant?.dsaId || null,
@@ -74,6 +82,7 @@ async function checkoutTransfer(dto, context = {}) {
   return createCheckoutSession({
     productType: 'TRANSFER',
     searchId: dto.searchId,
+    journeyId: dto.searchId,
     aplOfferId: offer.aplOfferId,
     aplEntityId: transfer.aplTransferId,
     dsaId: context.tenant?.dsaId,
@@ -108,6 +117,8 @@ async function checkoutTransfer(dto, context = {}) {
       customerPrice: priced.customerPrice,
       flightNumber: dto.flightNumber || null,
       pickupInstructions: dto.pickupInstructions || null,
+      pickupContact: dto.pickupContact || null,
+      pickupPoint: dto.pickupPoint || null,
       mock: true,
     },
   });

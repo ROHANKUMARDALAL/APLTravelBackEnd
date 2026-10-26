@@ -18,6 +18,7 @@ const {
   createPricingContext,
   calculatePrice,
 } = require('../../pricing/services/pricing-engine.service');
+const { zoneForCity, zonedDeparture } = require('../utils/point-window');
 
 function pickPoint(points, code) {
   return (points || []).find((p) => String(p.code) === String(code)) || null;
@@ -80,6 +81,9 @@ async function checkoutBus(dto, context = {}) {
     includeInternal: true,
   });
 
+  const departureTimeZone = zoneForCity(bus.departure?.city, bus.departure?.timeZone);
+  const departureAt = zonedDeparture(bus.travelDate, bus.departure?.time, departureTimeZone);
+
   const quote = {
     currency: priced.customerPrice.currency,
     amount: priced.customerPrice.amount,
@@ -92,6 +96,7 @@ async function checkoutBus(dto, context = {}) {
   return createCheckoutSession({
     productType: 'BUS',
     searchId: dto.searchId,
+    journeyId: dto.searchId,
     aplOfferId: offer.aplOfferId,
     aplEntityId: bus.aplBusId,
     dsaId: context.tenant?.dsaId,
@@ -123,6 +128,10 @@ async function checkoutBus(dto, context = {}) {
       selectedSeats: dto.selectedSeats,
       boardingPoint: boarding,
       droppingPoint: dropping,
+      boardingPoints: offer.boardingPoints || [],
+      droppingPoints: offer.droppingPoints || [],
+      departureAt: departureAt ? departureAt.toISOString() : null,
+      departureTimeZone,
       supplier: offer.supplier,
       supplierServiceId: offer.supplierServiceId,
       supplierPrice: priced.supplierPrice,

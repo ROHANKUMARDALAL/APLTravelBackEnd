@@ -40,15 +40,25 @@ describe('existing API mounts remain available', () => {
       const dsa = await get(server, '/api/dsa-admin/foundation');
       assert.equal(dsa.status, 404);
 
-      // Public site now requires a resolvable host/tenant (Phase 8).
+      // Public site requires a resolvable host. A connected database with no
+      // matching DSA returns 404. createApp() without a database returns 503
+      // DATABASE_UNAVAILABLE. A generic 500 is still a failure.
       const pub = await get(server, '/api/v1/public/site');
-      assert.ok([200, 403, 404].includes(pub.status));
+      assert.ok([200, 403, 404, 503].includes(pub.status), pub.text);
+      if (pub.status === 503) {
+        assert.equal(pub.json?.error?.code, 'DATABASE_UNAVAILABLE');
+      }
       assert.equal(typeof pub.json?.success, 'boolean');
 
       const flightsMissingMethod = await get(server, '/api/v1/flights');
-      // GET /flights is not a defined route, but namespace remains mounted (404 from app, not crash)
-      assert.equal(flightsMissingMethod.status, 404);
+      // The flight router is mounted, so tenant resolution runs before method matching.
+      // A connected database with no matching route returns 404. Without a database
+      // the same mounted router returns 503 DATABASE_UNAVAILABLE.
+      assert.ok([404, 503].includes(flightsMissingMethod.status), flightsMissingMethod.text);
       assert.equal(flightsMissingMethod.json?.success, false);
+      if (flightsMissingMethod.status === 503) {
+        assert.equal(flightsMissingMethod.json?.error?.code, 'DATABASE_UNAVAILABLE');
+      }
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

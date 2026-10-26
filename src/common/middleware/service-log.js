@@ -22,10 +22,14 @@ function serviceLogMiddleware(req, res, next) {
     const failed =
       res.statusCode >= 400 ||
       (error && error.errorCode && error.errorCode !== 0);
-    const service = serviceFromPath(req.originalUrl || req.path);
+    const service = req.logService || serviceFromPath(req.originalUrl || req.path);
     const operation = `${req.method} ${req.originalUrl}`;
     const common = {
       requestId: req.requestId,
+      journeyId: req.journeyId || undefined,
+      searchId: req.searchId || undefined,
+      parentJourneyId: req.parentJourneyId || undefined,
+      businessOperation: req.businessOperation || undefined,
       dsaId: req.tenant?.dsaId || undefined,
       userId: req.user?._id,
       service,
@@ -39,7 +43,7 @@ function serviceLogMiddleware(req, res, next) {
       ...common,
       stage: 'INBOUND_REQUEST',
       direction: 'INBOUND',
-      status: 'SUCCESS',
+      status: failed ? 'FAILED' : 'SUCCESS',
     });
 
     writeServiceLog({

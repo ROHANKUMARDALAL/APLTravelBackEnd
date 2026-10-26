@@ -4,7 +4,6 @@ const crypto = require('crypto');
 const { config } = require('../../common/config');
 const { AppError, ErrorCode } = require('../../common/errors/app-error');
 const { formatAplSearchId } = require('../../common/utils/apl-ids');
-const { getAllFlightAdapters } = require('../suppliers/registry');
 const { normalizeCandidate } = require('../utils/flight-normalization');
 const { resolveFlights } = require('../utils/flight-entity-resolution');
 const {
@@ -16,9 +15,12 @@ const { createPricingContext } = require('../../pricing/services/pricing-engine.
 const Supplier = require('../../common/database/models/Supplier');
 const { logSupplierOutcomes } = require('../../common/services/service-log.service');
 const { writeLifecycleLog } = require('../../common/services/lifecycle-log.service');
+const { newJourneyId, searchJourneyShell, lockSelectedOffer, logFlightOperation, resolveJourneySearch } = require('./flight-journey.service');
+const { assertFareConfirmation } = require('./flight-journey.policy');
 const {
   buildSupplierExecutionPlan,
 } = require('../../suppliers/services/supplier-routing.service');
+const { executeSupplierPlan } = require('../../suppliers/services/supplier-execution.service');
 const {
   resolveSupplierCredentials,
   toFailedOutcome,
@@ -30,6 +32,7 @@ const { flightAddOnCatalog } = require('../data/addons');
 const {
   assertSearchTenantMatch,
 } = require('../../tenant/services/transaction-tenant.service');
+const { shareOperation, recallOperation, rememberOperation } = require('../../common/services/operation-dedupe');
 
 async function ensureSuppliers() {
   for (const code of ['TBO', 'TRIPJACK', 'KAFILA']) {
@@ -79,12 +82,16 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
   const aplSearchId = formatAplSearchId(
     crypto.randomBytes(4).toString('hex').toUpperCase(),
   );
+  const journeyId = newJourneyId();
+  const journey = searchJourneyShell(journeyId, context.requestId);
   const forcedFailures = new Set(failureList);
 
   await writeLifecycleLog({
     stage: 'NORMALIZED_REQUEST',
     direction: 'INBOUND',
     requestId: context.requestId,
+    journeyId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'FLIGHT',
@@ -94,26 +101,14 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     request: criteria,
   });
 
-  let plan;
-  if (context.dsaId) {
-    plan = await buildSupplierExecutionPlan({
-      dsaId: context.dsaId,
-      serviceCode: 'flight',
-      operation: 'searchFlights',
-    });
-  } else {
-    plan = {
-      mode: 'LEGACY_MOCK_FANOUT',
-      reason: 'NO_TRANSACTION_TENANT',
-      strategy: 'PARALLEL',
-      suppliers: getAllFlightAdapters().map((adapter, index) => ({
-        supplierCode: adapter.code,
-        priority: index + 1,
-        adapter,
-        supplierId: null,
-      })),
-    };
+  if (!context.dsaId) {
+    throw AppError.noSupplier('No supplier is assigned for this service');
   }
+  const plan = await buildSupplierExecutionPlan({
+    dsaId: context.dsaId,
+    serviceCode: 'flight',
+    operation: 'searchFlights',
+  });
 
   const adapterContext = {
     requestId: context.requestId,
@@ -124,8 +119,9 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     routingStrategy: plan.strategy,
   };
 
-  const settled = await Promise.all(
-    plan.suppliers.map(async (entry) => {
+  const executed = await executeSupplierPlan(plan, {
+    isUsable: (outcome) => outcome?.status === 'SUCCESS' && (outcome.flights || []).length > 0,
+    invoke: async (entry) => {
       const adapter = entry.adapter;
       const started = Date.now();
       try {
@@ -137,36 +133,26 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
           environment: entry.environment || 'TEST',
           supplierCode: entry.supplierCode || adapter.code,
         });
-
-        const outcome = await adapter.searchFlights(criteria, {
+        return await adapter.searchFlights(criteria, {
           simulateFailure: forcedFailures.has(adapter.code),
           ...adapterContext,
           environment: entry.environment || 'TEST',
           supplierId: entry.supplierId || null,
           credentialRef,
-          /** Safe metadata for adapter diagnostics (no secret values). */
           credentialMeta: resolved.meta,
-          /**
-           * In-memory secrets for real adapters only.
-           * Must never be copied into supplierRequest/rawPayload/ServiceLog.
-           */
           credentials: resolved.secrets,
-          httpTimeoutMs: undefined,
+          httpTimeoutMs: config.supplierHttpTimeoutMs,
         });
-        return { adapter, outcome, supplierId: entry.supplierId };
       } catch (err) {
         const durationMs =
           err instanceof SupplierRuntimeError && err.details?.durationMs != null
             ? err.details.durationMs
             : Date.now() - started;
-        return {
-          adapter,
-          supplierId: entry.supplierId,
-          outcome: toFailedOutcome(err, durationMs),
-        };
+        return toFailedOutcome(err, durationMs);
       }
-    }),
-  );
+    },
+  });
+  const settled = executed.settled;
 
   const candidates = [];
   const supplierMeta = [];
@@ -236,6 +222,7 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
   const payload = {
     searchId: aplSearchId,
     status,
+    journeyId,
     tripType: criteria.tripType,
     originCity: {
       cityCode: originCity.cityCode,
@@ -273,6 +260,8 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     dsaId: context.dsaId || undefined,
     userId: context.userId || undefined,
     requestId: context.requestId || undefined,
+    journeyId,
+    journeys: [journey],
     request: criteria,
     results: payload,
     resultCount: flights.length,
@@ -289,6 +278,8 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
 
   await logSupplierOutcomes({
     requestId: context.requestId,
+    journeyId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'FLIGHT',
@@ -302,6 +293,8 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     stage: 'NORMALIZED_RESPONSE',
     direction: 'SUPPLIER',
     requestId: context.requestId,
+    journeyId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'FLIGHT',
@@ -398,7 +391,30 @@ async function getFlightDetails({ searchId, aplFlightId, aplFareId }, context = 
   };
 }
 
-async function revalidateFlightOffer(
+async function revalidateFlightOffer(args, context = {}) {
+  const key = [
+    'fare',
+    args.searchId,
+    args.aplFlightId,
+    args.aplFareId || '',
+    context.acceptPriceChange ? '1' : '0',
+    context.simulatePriceChange ? '1' : '0',
+    context.expired ? '1' : '0',
+    context.asReturn ? '1' : '0',
+    String(context.supplier || '').toUpperCase(),
+  ].join(':');
+  const cached = recallOperation(key);
+  if (cached && !context.simulatePriceChange && !context.expired) {
+    return { ...cached, idempotentReplay: true };
+  }
+  return shareOperation(key, async () => {
+    const body = await revalidateFlightOfferBody(args, context);
+    if (body?.status === 'AVAILABLE') rememberOperation(key, body, 10 * 60 * 1000);
+    return body;
+  });
+}
+
+async function revalidateFlightOfferBody(
   { searchId, aplFlightId, aplFareId },
   context = {},
 ) {
@@ -412,25 +428,270 @@ async function revalidateFlightOffer(
     context,
   );
   const fare = details.selectedFlightFareData;
-  return {
+  if (
+    context.supplier
+    && String(context.supplier).toUpperCase() !== String(fare.supplier || '').toUpperCase()
+  ) {
+    throw AppError.validation('Selected supplier does not match this offer');
+  }
+  const { getFlightAdapter } = require('../suppliers/registry');
+  const adapter = getFlightAdapter(fare.supplier);
+  if (!adapter || typeof adapter.fareQuote !== 'function') {
+    throw AppError.validation('Fare confirmation is not available for this supplier');
+  }
+  const quoted = await adapter.fareQuote(
+    {
+      ...fare,
+      segments: details.flight?.segments,
+      supplierPrice: fare.supplierPrice || fare.price,
+      refundable: fare.refundable,
+      baggage: fare.baggage,
+    },
+    {
+      simulatePriceChange: context.simulatePriceChange === true,
+      expired: context.expired === true,
+    },
+  );
+  if (!quoted || quoted.status === 'UNAVAILABLE' || quoted.status === 'EXPIRED') {
+    const search = await resolveJourneySearch(await getSearchOrThrow(searchId), context);
+    const journey = await lockSelectedOffer(search, {
+      aplFlightId,
+      aplFareId: fare.aplFareId,
+      supplier: fare.supplier,
+      supplierOfferId: fare.supplierOfferId,
+      supplierReference: fare.supplierReference,
+    }, {
+      requestId: context.requestId,
+      clientJourneyId: context.clientJourneyId || null,
+      asReturn: context.asReturn === true,
+    });
+    if (context.requestId) {
+      await logFlightOperation({
+        businessOperation: 'CONFIRM_FARE',
+        journey,
+        requestId: context.requestId,
+        dsaId: context.dsaId || context.tenant?.dsaId,
+        userId: context.userId,
+        searchId,
+        supplierCode: fare.supplier,
+        mainRequest: { searchId, aplFlightId, aplFareId: fare.aplFareId, supplier: fare.supplier },
+        supplierRequest: { supplier: fare.supplier, supplierOfferId: fare.supplierOfferId || null },
+        supplierResponse: quoted,
+        mainResponse: { status: quoted?.status || 'UNAVAILABLE' },
+        status: 'FAILED',
+        httpStatus: 400,
+        errorMessage: quoted?.status === 'EXPIRED'
+          ? 'Fare quote has expired. Please search again.'
+          : 'The selected fare is not available.',
+      });
+    }
+    throw AppError.validation(
+      quoted?.status === 'EXPIRED'
+        ? 'Fare quote has expired. Please search again.'
+        : 'The selected fare is not available.',
+    );
+  }
+  const priceChanged = Boolean(quoted.priceChanged) && context.acceptPriceChange !== true;
+  const confirmation = {
+    status: priceChanged ? 'PRICE_CHANGED' : 'CONFIRMED',
+    quoteId: quoted.quoteId,
+    supplier: fare.supplier,
+    aplFareId: fare.aplFareId,
+    aplFlightId,
+    supplierPrice: quoted.price,
+    currency: quoted.price?.currency || fare.supplierPrice?.currency || 'INR',
+    expiresAt: quoted.expiresAt,
+    confirmedAt: priceChanged ? null : new Date().toISOString(),
+    supplierReference: fare.supplierReference || null,
+  };
+  const search = await resolveJourneySearch(await getSearchOrThrow(searchId), context);
+  const journey = await lockSelectedOffer(
+    search,
+    {
+      aplFlightId,
+      aplFareId: fare.aplFareId,
+      supplier: fare.supplier,
+      supplierOfferId: fare.supplierOfferId,
+      supplierReference: fare.supplierReference,
+      quoteId: quoted.quoteId || null,
+      expiresAt: quoted.expiresAt || null,
+      fareConfirmation: confirmation,
+    },
+    {
+      requestId: context.requestId,
+      operationKey: 'confirmFareRequestId',
+      clientJourneyId: context.clientJourneyId || null,
+      asReturn: context.asReturn === true,
+    },
+  );
+  const body = {
     searchId,
+    journeyId: journey.journeyId,
     aplFlightId,
     aplFareId: fare.aplFareId,
-    status: 'AVAILABLE',
-    priceChanged: false,
-    price: fare.price,
+    status: priceChanged ? 'PRICE_CHANGED' : 'AVAILABLE',
+    priceChanged,
+    requiresAcceptance: priceChanged,
+    previousPrice: quoted.previousPrice || fare.supplierPrice || fare.price,
+    price: priceChanged ? quoted.price : fare.price,
+    supplierPrice: quoted.price,
+    quoteId: quoted.quoteId || null,
     seatsLeft: fare.seatsLeft,
     supplier: fare.supplier,
     supplierReference: fare.supplierReference,
     selectedFlightFareData: fare,
-    validUntil: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    fareRules: quoted?.fareRules || null,
+    baggage: quoted?.baggage || fare.baggage || null,
+    flight: details.flight,
+    testBooking: true,
+    validUntil: quoted?.expiresAt || new Date(Date.now() + 10 * 60 * 1000).toISOString(),
   };
+  if (context.requestId) {
+    await logFlightOperation({
+      businessOperation: 'CONFIRM_FARE',
+      journey,
+      requestId: context.requestId,
+      dsaId: context.dsaId || context.tenant?.dsaId,
+      userId: context.userId,
+      searchId,
+      supplierCode: fare.supplier,
+      mainRequest: { searchId, aplFlightId, aplFareId: fare.aplFareId, supplier: fare.supplier },
+      supplierRequest: { supplier: fare.supplier, supplierOfferId: fare.supplierOfferId || null },
+      supplierResponse: quoted,
+      mainResponse: {
+        status: body.status,
+        priceChanged: body.priceChanged,
+        quoteId: body.quoteId,
+        price: body.price,
+        supplier: fare.supplier,
+      },
+      status: 'SUCCESS',
+    });
+  }
+  return body;
+}
+
+async function getFlightSsr(args, context = {}) {
+  const key = [
+    'ssr',
+    args.searchId,
+    args.aplFlightId,
+    args.aplFareId || '',
+    context.asReturn ? '1' : '0',
+    String(context.supplier || '').toUpperCase(),
+  ].join(':');
+  const cached = recallOperation(key);
+  if (cached) return { ...cached, idempotentReplay: true };
+  return shareOperation(key, async () => {
+    const body = await getFlightSsrBody(args, context);
+    if (body?.segments) rememberOperation(key, body, 10 * 60 * 1000);
+    return body;
+  });
+}
+
+async function getFlightSsrBody({ searchId, aplFlightId, aplFareId }, context = {}) {
+  const details = await getFlightDetails({ searchId, aplFlightId, aplFareId }, context);
+  const { getFlightAdapter } = require('../suppliers/registry');
+  const fare = details.selectedFlightFareData;
+  const supplier = fare?.supplier;
+  if (
+    context.supplier
+    && String(context.supplier).toUpperCase() !== String(supplier || '').toUpperCase()
+  ) {
+    throw AppError.validation('Selected supplier does not match this offer');
+  }
+  const adapter = getFlightAdapter(supplier);
+  if (!adapter || typeof adapter.getSsr !== 'function') {
+    throw AppError.validation('SSR is not available for this supplier');
+  }
+  const search = await resolveJourneySearch(await getSearchOrThrow(searchId), context);
+  const journey = await lockSelectedOffer(
+    search,
+    {
+      aplFlightId,
+      aplFareId: fare.aplFareId,
+      supplier,
+      supplierOfferId: fare.supplierOfferId,
+      supplierReference: fare.supplierReference,
+    },
+    {
+      requestId: context.requestId,
+      operationKey: 'ssrRequestId',
+      clientJourneyId: context.clientJourneyId || null,
+      asReturn: context.asReturn === true,
+    },
+  );
+  if (journey.supplier && journey.supplier !== supplier) {
+    throw AppError.validation('Selected supplier does not match the stored offer');
+  }
+  try {
+    assertFareConfirmation(journey, { aplFareId: fare.aplFareId, supplier, asReturn: context.asReturn === true });
+  } catch (error) {
+    if (context.requestId) {
+      await logFlightOperation({
+        businessOperation: 'SSR',
+        journey,
+        requestId: context.requestId,
+        dsaId: context.dsaId || context.tenant?.dsaId,
+        userId: context.userId,
+        searchId,
+        supplierCode: supplier,
+        mainRequest: { searchId, aplFlightId, aplFareId: fare.aplFareId, supplier },
+        mainResponse: { status: 'FAILED' },
+        status: 'FAILED',
+        httpStatus: 400,
+        errorMessage: error.message,
+      });
+    }
+    throw error;
+  }
+  const started = Date.now();
+  const offer = {
+    ...fare,
+    segments: details.flight?.segments,
+    supplierPrice: fare?.supplierPrice,
+    refundable: fare?.refundable,
+    baggage: details.baggage,
+  };
+  const inventory = await adapter.getSsr(offer);
+  const body = {
+    searchId,
+    journeyId: journey.journeyId,
+    aplFlightId,
+    aplFareId: fare.aplFareId,
+    supplier,
+    testBooking: true,
+    ...inventory,
+  };
+  if (context.requestId) {
+    await logFlightOperation({
+      businessOperation: 'SSR',
+      journey,
+      requestId: context.requestId,
+      dsaId: context.dsaId || context.tenant?.dsaId,
+      userId: context.userId,
+      searchId,
+      supplierCode: supplier,
+      mainRequest: { searchId, aplFlightId, aplFareId: fare.aplFareId, supplier },
+      supplierRequest: { supplier, supplierOfferId: fare.supplierOfferId || null },
+      supplierResponse: inventory,
+      mainResponse: {
+        supplier,
+        segmentCount: inventory?.segments?.length || 0,
+        testBooking: true,
+      },
+      status: inventory?.status === 'FAILED' ? 'FAILED' : 'SUCCESS',
+      durationMs: Date.now() - started,
+    });
+  }
+  return body;
 }
 
 module.exports = {
   searchFlights,
   getFlightDetails,
   revalidateFlightOffer,
+  getFlightSsr,
   findFlightInResults,
   findFareOnFlight,
   getSearchOrThrow,

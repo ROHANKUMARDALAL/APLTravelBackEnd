@@ -1,7 +1,12 @@
 'use strict';
 
 const { Types } = require('mongoose');
-const { isServiceOffered } = require('@apl/shared-domain');
+const {
+  isServiceOffered,
+  canonicalServiceCode,
+  serviceModeForCode,
+  publicServiceLabel,
+} = require('@apl/shared-domain');
 const { AppError } = require('../../common/errors/app-error');
 const Dsa = require('../models/Dsa');
 const Service = require('../models/Service');
@@ -113,22 +118,35 @@ async function listOfferedServicesForDsa(dsaId) {
     .lean();
 
   const byId = new Map(services.map((svc) => [String(svc._id), svc]));
-  return mappings
+  const rows = mappings
     .map((mapping) => {
       const service = byId.get(String(mapping.serviceId));
       if (!service) return null;
       if (!isServiceOffered({ dsa, service, mapping })) return null;
+      const code = canonicalServiceCode(service.code);
       return {
-        code: service.code,
-        name: service.name,
-        slug: service.slug,
-        icon: service.icon,
+        code,
+        storedCode: service.code,
+        name: publicServiceLabel(service.code, service.name),
+        slug: code,
+        icon: service.icon || code,
+        serviceMode: serviceModeForCode(service.code, service.serviceMode),
         displayOrder:
           mapping.displayOrder == null ? service.displayOrder : mapping.displayOrder,
       };
     })
-    .filter(Boolean)
-    .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name));
+    .filter(Boolean);
+
+  const byCode = new Map();
+  for (const row of rows) {
+    const current = byCode.get(row.code);
+    if (!current || (row.storedCode === row.code && current.storedCode !== row.code)) {
+      byCode.set(row.code, row);
+    }
+  }
+  return [...byCode.values()].sort(
+    (a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name),
+  );
 }
 
 module.exports = {

@@ -4,7 +4,6 @@ const crypto = require('crypto');
 const { config } = require('../../common/config');
 const { AppError, ErrorCode } = require('../../common/errors/app-error');
 const { formatAplSearchId } = require('../../common/utils/apl-ids');
-const { getAllAdapters } = require('../suppliers/registry');
 const { normalizeCandidate } = require('../utils/hotel-normalization');
 const { resolveHotels } = require('../utils/hotel-entity-resolution');
 const { consolidateOffers, sanitizeHotelSearchForPublic } = require('../utils/offer-consolidation');
@@ -16,6 +15,7 @@ const { writeLifecycleLog } = require('../../common/services/lifecycle-log.servi
 const {
   buildSupplierExecutionPlan,
 } = require('../../suppliers/services/supplier-routing.service');
+const { executeSupplierPlan } = require('../../suppliers/services/supplier-execution.service');
 const Hotel = require('../models/Hotel');
 const Search = require('../../common/database/models/Search');
 const { hotelExtraServices } = require('../data/extra-services');
@@ -69,6 +69,7 @@ async function persistSearchArtifacts({
 
   await Search.create({
     aplSearchId,
+    journeyId: aplSearchId,
     type: 'HOTEL',
     status,
     dsaId: context.dsaId || undefined,
@@ -95,6 +96,8 @@ async function persistSearchArtifacts({
 
   await logSupplierOutcomes({
     requestId: context.requestId,
+    journeyId: aplSearchId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'HOTEL',
@@ -108,6 +111,8 @@ async function persistSearchArtifacts({
     stage: 'NORMALIZED_RESPONSE',
     direction: 'SUPPLIER',
     requestId: context.requestId,
+    journeyId: aplSearchId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'HOTEL',
@@ -206,6 +211,8 @@ async function searchHotels(dto, forcedFailureList, context = {}) {
     stage: 'NORMALIZED_REQUEST',
     direction: 'INBOUND',
     requestId: context.requestId,
+    journeyId: aplSearchId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'HOTEL',
@@ -215,26 +222,14 @@ async function searchHotels(dto, forcedFailureList, context = {}) {
     request: criteria,
   });
 
-  let plan;
-  if (context.dsaId) {
-    plan = await buildSupplierExecutionPlan({
-      dsaId: context.dsaId,
-      serviceCode: 'hotel',
-      operation: 'searchHotels',
-    });
-  } else {
-    plan = {
-      mode: 'LEGACY_MOCK_FANOUT',
-      reason: 'NO_TRANSACTION_TENANT',
-      strategy: 'PARALLEL',
-      suppliers: getAllAdapters().map((adapter, index) => ({
-        supplierCode: adapter.code,
-        priority: index + 1,
-        adapter,
-        supplierId: null,
-      })),
-    };
+  if (!context.dsaId) {
+    throw AppError.noSupplier('No supplier is assigned for this service');
   }
+  const plan = await buildSupplierExecutionPlan({
+    dsaId: context.dsaId,
+    serviceCode: 'hotel',
+    operation: 'searchHotels',
+  });
 
   const adapterContext = {
     requestId: context.requestId,
@@ -245,32 +240,28 @@ async function searchHotels(dto, forcedFailureList, context = {}) {
     routingStrategy: plan.strategy,
   };
 
-  const settled = await Promise.all(
-    plan.suppliers.map(async (entry) => {
-      const adapter = entry.adapter;
+  const executed = await executeSupplierPlan(plan, {
+    isUsable: (outcome) => outcome?.status === 'SUCCESS' && (outcome.hotels || []).length > 0,
+    invoke: async (entry) => {
       try {
-        const outcome = await adapter.searchHotels(criteria, {
-          simulateFailure: forcedFailures.has(adapter.code),
+        return await entry.adapter.searchHotels(criteria, {
+          simulateFailure: forcedFailures.has(entry.adapter.code),
           ...adapterContext,
           environment: entry.environment,
         });
-        return { adapter, outcome, supplierId: entry.supplierId };
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown supplier error';
-        console.error(`Supplier ${adapter.code} threw: ${message}`);
         return {
-          adapter,
-          supplierId: entry.supplierId,
-          outcome: {
-            status: 'FAILED',
-            durationMs: 0,
-            errorCode: 'SUPPLIER_EXCEPTION',
-            errorMessage: message,
-          },
+          status: 'FAILED',
+          durationMs: 0,
+          errorCode: 'SUPPLIER_EXCEPTION',
+          errorMessage: message,
+          hotels: [],
         };
       }
-    }),
-  );
+    },
+  });
+  const settled = executed.settled;
 
   const candidates = [];
   const supplierMeta = [];
@@ -441,6 +432,12 @@ async function revalidateHotelOffer(
     context,
   );
   const room = details.selectedRoom;
+  if (
+    context.supplier
+    && String(context.supplier).toUpperCase() !== String(room.supplier || '').toUpperCase()
+  ) {
+    throw AppError.validation('Selected supplier does not match this offer');
+  }
   return {
     searchId,
     aplHotelId,

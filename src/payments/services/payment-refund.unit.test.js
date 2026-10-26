@@ -81,6 +81,17 @@ describe('Phase 13 server-authoritative payment amount', () => {
     assert.equal(charge.currency, 'INR');
   });
 
+  it('charges the checkout payable when SSR is included in totalAmount', () => {
+    const charge = resolveChargeAmount({
+      pricing: { amount: 5482, currency: 'INR' },
+      commercialSnapshot: {
+        finalPrice: { amount: 4682, currency: 'INR' },
+        totalAmount: 5482,
+      },
+    });
+    assert.equal(charge.amount, 5482);
+  });
+
   it('rejects tampered client payment.amount', () => {
     assert.throws(
       () => assertNoClientAmountTamper(session, { amount: 100 }),
@@ -91,6 +102,17 @@ describe('Phase 13 server-authoritative payment amount', () => {
   it('allows omit of client amount (server authoritative)', () => {
     assert.doesNotThrow(() =>
       assertNoClientAmountTamper(session, { method: 'CARD' }),
+    );
+  });
+
+  it('rejects a card total that drops the 2.5% fee', () => {
+    const priced = {
+      pricing: { amount: 10000, currency: 'INR' },
+      commercialSnapshot: { totalAmount: 10000, finalPrice: { amount: 10000, currency: 'INR' } },
+    };
+    assert.throws(
+      () => assertNoClientAmountTamper(priced, { method: 'CARD', amount: 10000, feeAmount: 0 }),
+      (err) => err instanceof AppError,
     );
   });
 });

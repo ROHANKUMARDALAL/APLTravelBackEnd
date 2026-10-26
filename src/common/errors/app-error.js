@@ -9,6 +9,7 @@ const ErrorCode = {
   INTERNAL_ERROR: 'INTERNAL_ERROR',
   SEARCH_FAILED: 'SEARCH_FAILED',
   SUPPLIER_ERROR: 'SUPPLIER_ERROR',
+  NO_SUPPLIER_ASSIGNED: 'NO_SUPPLIER_ASSIGNED',
   DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE',
 };
 
@@ -41,6 +42,13 @@ class AppError extends Error {
 
   static forbidden(message = 'Permission denied') {
     return new AppError(ErrorCode.FORBIDDEN, message, { httpStatus: 403 });
+  }
+
+  static noSupplier(message = 'No supplier is assigned for this service', details = []) {
+    return new AppError(ErrorCode.NO_SUPPLIER_ASSIGNED, message, {
+      httpStatus: 409,
+      details,
+    });
   }
 
   static internal(message, cause) {

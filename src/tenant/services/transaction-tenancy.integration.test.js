@@ -375,6 +375,11 @@ describeDb('Phase 9 transaction tenant foundation', () => {
     });
     assert.equal(checkout.status, 200, JSON.stringify(checkout.json));
     const checkoutToken = checkout.json.data.checkoutToken;
+    const blocked = await httpJson(port, 'POST', '/api/v1/flights/block', {
+      headers: tenantHeaders(hostA, { Authorization: `Bearer ${token}` }),
+      body: { checkoutToken },
+    });
+    assert.equal(blocked.status, 200, JSON.stringify(blocked.json));
 
     const book = await httpJson(port, 'POST', '/api/v1/flights/book', {
       headers: tenantHeaders(hostA, {

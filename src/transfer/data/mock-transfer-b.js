@@ -1,6 +1,7 @@
 'use strict';
 
 const { formatAplLocationId } = require('../services/location.service');
+const { pickupPointsFor } = require('./pickup-points');
 
 function pointKey(point) {
   return String(point?.aplLocationId || point?.name || '')
@@ -93,6 +94,7 @@ function getMockTransferBInventory(criteria = {}) {
       ...svc,
       currency: 'INR',
       transferType: criteria.transferType || 'AIRPORT_TRANSFER',
+      pickupPoints: pickupPointsFor(pickup),
       pickup: {
         ...pickup,
         aplLocationId:

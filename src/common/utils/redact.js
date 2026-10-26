@@ -30,6 +30,21 @@ const SECRET_KEYS = new Set([
   'credentials',
   'privatekey',
   'private_key',
+  'email',
+  'guestemail',
+  'phone',
+  'guestphone',
+  'phonenumber',
+  'mobile',
+  'passport',
+  'passportnumber',
+  'passportexpiry',
+  'dateofbirth',
+  'dob',
+  'address',
+  'addressline1',
+  'addressline2',
+  'beneficiary',
 ]);
 
 const SECRET_SUBSTRINGS = [
@@ -57,8 +72,10 @@ function redact(value, depth = 0) {
     return value.slice(0, 100).map((item) => redact(item, depth + 1));
   }
   if (typeof value !== 'object') return value;
+  if (typeof value.toObject === 'function') return redact(value.toObject(), depth + 1);
   const out = {};
   for (const [key, child] of Object.entries(value)) {
+    if (key.startsWith('$') || key.startsWith('__')) continue;
     if (isSecretKey(key)) {
       out[key] = '[redacted]';
     } else {

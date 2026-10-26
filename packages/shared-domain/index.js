@@ -19,6 +19,9 @@ const { OWNERSHIP } = require('./contracts/ownership');
 const { CONTRACTS } = require('./contracts/required-fields');
 const customerIdentity = require('./contracts/customer-identity');
 const models = require('./models');
+const holidayPackages = require('./services/holiday-package');
+const enquiries = require('./services/enquiry-store');
+const { DomainError } = require('./services/domain-error');
 
 module.exports = {
   ...constants,
@@ -29,6 +32,9 @@ module.exports = {
   CONTRACTS,
   customerIdentity,
   models,
+  holidayPackages,
+  enquiries,
+  DomainError,
   PACKAGE_NAME: '@apl/shared-domain',
   PACKAGE_VERSION: '1.0.0',
 };

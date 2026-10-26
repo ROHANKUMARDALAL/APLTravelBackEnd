@@ -54,6 +54,10 @@ const ServiceLogSchema = new mongoose.Schema(
       index: true,
     },
     searchId: { type: String, index: true },
+    /** Server-generated flight booking journey. Absent on historical logs. */
+    journeyId: { type: String, index: true },
+    parentJourneyId: { type: String, index: true },
+    businessOperation: { type: String, index: true },
     status: {
       type: String,
       enum: ['SUCCESS', 'FAILED', 'PARTIAL', 'SKIPPED'],
@@ -78,6 +82,7 @@ const ServiceLogSchema = new mongoose.Schema(
 ServiceLogSchema.index({ dsaId: 1, createdAt: -1 });
 ServiceLogSchema.index({ dsaId: 1, service: 1, createdAt: -1 });
 ServiceLogSchema.index({ requestId: 1, createdAt: 1 });
+ServiceLogSchema.index({ journeyId: 1, createdAt: 1 });
 ServiceLogSchema.index({ stage: 1, createdAt: -1 });
 ServiceLogSchema.index({ supplierCode: 1, createdAt: -1 });
 

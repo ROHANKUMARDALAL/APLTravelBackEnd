@@ -83,6 +83,7 @@ async function checkoutHotel(dto, context = {}) {
   return createCheckoutSession({
     productType: 'HOTEL',
     searchId: dto.searchId,
+    journeyId: dto.searchId,
     aplOfferId: room.aplRoomId,
     aplEntityId: details.aplHotelId,
     dsaId: context.tenant?.dsaId,

@@ -2,6 +2,7 @@
 
 const { delay, normalizeIata } = require('../mock.helpers');
 const { getMockKafilaFlights } = require('../../data/mock-kafila-flights');
+const { mockFlightOperations } = require('../mock-flight-operations');
 
 const mockKafilaFlightAdapter = {
   code: 'KAFILA',
@@ -51,6 +52,13 @@ const mockKafilaFlightAdapter = {
       rawPayload: { mock: true, supplier: 'KAFILA', flights },
     };
   },
+
+  fareQuote: mockFlightOperations.fareQuote,
+  getSsr: mockFlightOperations.getSsr,
+  blockFlight: mockFlightOperations.blockFlight,
+  bookFlight: mockFlightOperations.bookFlight,
+  retrieveBooking: mockFlightOperations.retrieveBooking,
+  cancelBooking: mockFlightOperations.cancelBooking,
 };
 
 module.exports = { mockKafilaFlightAdapter };

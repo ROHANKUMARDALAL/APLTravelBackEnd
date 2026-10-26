@@ -3,6 +3,68 @@
 const mongoose = require('mongoose');
 const { config } = require('../config');
 const { bookingClock, serviceFolderName } = require('../utils/booking-time');
+const {
+  isDatabaseTestProcess,
+  assertIsolatedTestDatabase,
+  assertDestructiveCleanup,
+  currentApprovedDatabaseName,
+} = require('./test-database-guard');
+
+function armDestructiveGuards() {
+  const collectionPrototype = mongoose.Collection.prototype;
+  if (!collectionPrototype.__aplTestGuarded) {
+    collectionPrototype.__aplTestGuarded = true;
+    const originalDeleteMany = collectionPrototype.deleteMany;
+    collectionPrototype.deleteMany = function deleteManyGuarded(filter, options, callback) {
+      if (isDatabaseTestProcess()) {
+        const databaseName = this.conn?.name || this.conn?.db?.databaseName || '';
+        try {
+          assertDestructiveCleanup({
+            collection: this.collectionName || this.name,
+            filter,
+            databaseName,
+          });
+        } catch (error) {
+          if (typeof options === 'function') return options(error);
+          if (typeof callback === 'function') return callback(error);
+          return Promise.reject(error);
+        }
+      }
+      return originalDeleteMany.call(this, filter, options, callback);
+    };
+  }
+
+  const db = mongoose.connection.db;
+  if (db && !db.__aplTestGuarded) {
+    db.__aplTestGuarded = true;
+    const originalDrop = db.dropDatabase.bind(db);
+    db.dropDatabase = async function dropDatabaseGuarded(...args) {
+      assertDestructiveCleanup({
+        operation: 'dropDatabase',
+        databaseName: db.databaseName,
+        filter: { isolatedRun: currentApprovedDatabaseName() },
+      });
+      return originalDrop(...args);
+    };
+    const originalCollection = db.collection.bind(db);
+    db.collection = function collectionGuarded(name, options) {
+      const coll = originalCollection(name, options);
+      if (!coll.__aplTestGuarded) {
+        coll.__aplTestGuarded = true;
+        const originalDelete = coll.deleteMany.bind(coll);
+        coll.deleteMany = function nativeDeleteManyGuarded(filter, options) {
+          assertDestructiveCleanup({
+            collection: name,
+            filter,
+            databaseName: db.databaseName,
+          });
+          return originalDelete(filter, options);
+        };
+      }
+      return coll;
+    };
+  }
+}
 
 async function ensureBookingServiceView() {
   const db = mongoose.connection.db;
@@ -66,7 +128,9 @@ async function backfillBookingFolders() {
 
 async function connectDatabase() {
   mongoose.set('strictQuery', true);
-  await mongoose.connect(config.mongodbUri);
+  const uri = isDatabaseTestProcess() ? assertIsolatedTestDatabase() : config.mongodbUri;
+  await mongoose.connect(uri);
+  if (isDatabaseTestProcess()) armDestructiveGuards();
   await backfillBookingFolders();
   await ensureBookingServiceView();
   console.log('Connected to MongoDB');

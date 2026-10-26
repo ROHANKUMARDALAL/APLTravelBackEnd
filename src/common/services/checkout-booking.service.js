@@ -22,6 +22,8 @@ const {
   toPublicPayment,
   normalizePaymentStatus,
 } = require('../../payments/services/payment.service');
+const { canChangePoints } = require('../../bus/utils/point-window');
+const CustomerWallet = require('../../customer/models/CustomerWallet');
 const {
   processCancellation,
   toPublicCancellation,
@@ -51,6 +53,8 @@ async function createCheckoutSession({
   travellers,
   dsaId,
   requestId,
+  journeyId,
+  userId,
 }) {
   const checkoutToken = `chk_${uuidv4().replace(/-/g, '')}`;
   const session = await CheckoutSession.create({
@@ -61,6 +65,8 @@ async function createCheckoutSession({
     aplEntityId,
     dsaId: dsaId || undefined,
     requestId: requestId || undefined,
+    journeyId: journeyId || undefined,
+    userId: userId || undefined,
     status: 'READY',
     contact,
     travellers,
@@ -80,6 +86,7 @@ async function createCheckoutSession({
     travellersCount: travellers.length,
     contact,
     expiresAt: session.expiresAt.toISOString(),
+    journeyId: session.journeyId || null,
     nextStep: 'POST /api/v1/{flights|hotels|buses|transfers}/book with checkoutToken + payment',
   };
 }
@@ -102,6 +109,8 @@ async function loadConfirmedBookingResponse(booking, paymentDoc, user, offerSnap
     travellers: booking.travellers,
     dsaId: booking.dsaId ? String(booking.dsaId) : null,
     requestId: booking.requestId || null,
+    searchId: booking.searchId || null,
+    journeyId: booking.journeyId || booking.searchId || null,
     commercialSnapshot: booking.commercialSnapshot || null,
     items: (booking.items || []).map((i) => ({
       productType: i.productType,
@@ -118,6 +127,15 @@ async function loadConfirmedBookingResponse(booking, paymentDoc, user, offerSnap
     offer: offerSnapshot,
     needsAttention: Boolean(paymentDoc?.needsAttention),
   };
+}
+
+async function waitForCheckoutSettlement(sessionId) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const fresh = await CheckoutSession.findById(sessionId);
+    if (!fresh || fresh.status !== 'PAYING') return fresh;
+  }
+  return CheckoutSession.findById(sessionId);
 }
 
 async function confirmBookingFromCheckout({
@@ -183,24 +201,46 @@ async function confirmBookingFromCheckout({
     throw AppError.validation('Checkout session expired. Start checkout again.');
   }
 
-  const charge = resolveChargeAmount(session);
+  const baseCharge = resolveChargeAmount(session);
   assertExactPrice(
-    { amount: charge.amount, currency: charge.currency },
+    { amount: baseCharge.amount, currency: baseCharge.currency },
     confirmPrice,
   );
+  const charge = resolveChargeAmount(session, payment || {});
+  if (payment?.amount != null && Number(payment.amount) !== charge.amount) {
+    throw AppError.validation('Payment amount does not match the fare plus payment fee', [
+      {
+        requiredAmount: charge.amount,
+        providedAmount: Number(payment.amount),
+        feeAmount: charge.paymentFee,
+        currency: charge.currency,
+      },
+    ]);
+  }
+  if (payment?.feeAmount != null && Number(payment.feeAmount) !== charge.paymentFee) {
+    throw AppError.validation('Payment fee does not match the selected method', [
+      {
+        requiredFee: charge.paymentFee,
+        providedFee: Number(payment.feeAmount),
+        method: charge.paymentMethod,
+      },
+    ]);
+  }
 
-  if (payment.method === 'WALLET') {
-    if (user.currency !== charge.currency) {
-      throw AppError.validation(
-        `Wallet currency ${user.currency} does not match booking currency ${charge.currency}`,
-      );
-    }
-    if (user.balance < charge.amount) {
+  let walletDoc = null;
+  if (charge.paymentMethod === 'WALLET') {
+    walletDoc = await CustomerWallet.findOne({
+      userId: user._id,
+      dsaId: session.dsaId,
+      currency: charge.currency,
+    });
+    const balance = Number(walletDoc?.balance || 0);
+    if (!walletDoc || balance < charge.amount) {
       throw AppError.validation('Insufficient wallet balance', [
         {
-          balance: user.balance,
+          balance,
           requiredAmount: charge.amount,
-          currency: user.currency,
+          currency: charge.currency,
         },
       ]);
     }
@@ -239,6 +279,24 @@ async function confirmBookingFromCheckout({
       }
     }
     if (fresh?.status === 'PAYING') {
+      const settled = await waitForCheckoutSettlement(session._id);
+      if (settled?.status === 'BOOKED' && settled.aplBookingRef) {
+        const existing = await Booking.findOne({
+          aplBookingRef: settled.aplBookingRef,
+        });
+        const pay = existing
+          ? await Payment.findOne({ bookingId: existing._id }).sort({ createdAt: -1 })
+          : null;
+        if (existing) {
+          const response = await loadConfirmedBookingResponse(
+            existing,
+            pay,
+            user,
+            settled.offerSnapshot,
+          );
+          return { ...response, idempotentReplay: true };
+        }
+      }
       throw AppError.validation(
         'Payment already in progress for this checkout. Retry shortly.',
       );
@@ -349,8 +407,186 @@ async function confirmBookingFromCheckout({
   const aplBookingRef = formatAplBookingRef(
     crypto.randomBytes(4).toString('hex').toUpperCase(),
   );
-  const supplierCode = claimed.offerSnapshot?.supplier || 'TBO';
-  const supplierBookingRef = `PNR${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  let supplierCode = claimed.offerSnapshot?.supplier || 'TBO';
+  let supplierBookingRef = claimed.productType === 'FLIGHT'
+    ? null
+    : `PNR${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  if (claimed.productType === 'INSURANCE') {
+    const { mockInsuranceAdapter } = require('../../insurance/suppliers/mock-insure.adapter');
+    const issued = await mockInsuranceAdapter.issueDemo(claimed.offerSnapshot || {}, {
+      requestId: requestId || claimed.requestId,
+      dsaId: claimed.dsaId,
+      userId: user._id,
+      searchId: claimed.searchId,
+      journeyId: claimed.journeyId,
+    });
+    supplierCode = 'MOCK_INSURE';
+    supplierBookingRef = issued.reference;
+  }
+  if (claimed.productType === 'FLIGHT') {
+    const { assertFareConfirmation } = require('../../flight/services/flight-journey.policy');
+    const Search = require('../database/models/Search');
+    const owned = claimed.journeyId
+      ? await Search.findOne({
+        type: 'FLIGHT',
+        $or: [{ journeyId: claimed.journeyId }, { 'journeys.journeyId': claimed.journeyId }],
+      }).lean()
+      : null;
+    const journey = (owned?.journeys || []).find((row) => row.journeyId === claimed.journeyId) || null;
+    try {
+      assertFareConfirmation(journey, {
+        aplFareId: claimed.offerSnapshot?.aplFareId,
+        supplier: supplierCode,
+      });
+    } catch (error) {
+      await writeLifecycleLog({
+        requestId: requestId || claimed.requestId,
+        journeyId: claimed.journeyId || undefined,
+        businessOperation: 'BOOK',
+        dsaId: claimed.dsaId,
+        userId: user._id,
+        service: 'FLIGHT',
+        operation: 'BOOK',
+        supplierCode,
+        searchId: claimed.searchId,
+        stage: 'OUTBOUND_RESPONSE',
+        direction: 'INBOUND',
+        status: 'FAILED',
+        httpStatus: 400,
+        errorMessage: error.message,
+        result: { status: 'FAILED' },
+      });
+      throw error;
+    }
+    const { getFlightAdapter } = require('../../flight/suppliers/registry');
+    const adapter = getFlightAdapter(supplierCode);
+    const bookLog = {
+      requestId: requestId || claimed.requestId,
+      journeyId: claimed.journeyId || undefined,
+      businessOperation: 'BOOK',
+      dsaId: claimed.dsaId,
+      userId: user._id,
+      service: 'FLIGHT',
+      operation: 'BOOK',
+      supplierCode,
+      searchId: claimed.searchId,
+    };
+    await writeLifecycleLog({
+      ...bookLog,
+      stage: 'INBOUND_REQUEST',
+      direction: 'INBOUND',
+      status: 'SUCCESS',
+      request: {
+        checkoutToken: claimed.checkoutToken,
+        blockRef: claimed.block?.blockRef || null,
+        supplier: supplierCode,
+        paymentRef: paymentDoc.paymentRef,
+      },
+    });
+    await writeLifecycleLog({
+      ...bookLog,
+      stage: 'SUPPLIER_REQUEST',
+      direction: 'SUPPLIER',
+      status: 'SUCCESS',
+      storeRaw: true,
+      rawPayload: {
+        supplier: supplierCode,
+        offerId: claimed.aplOfferId,
+        blockRef: claimed.block?.supplierBlockRef || null,
+      },
+    });
+    if (!adapter || typeof adapter.bookFlight !== 'function') {
+      throw AppError.validation('Booking is not available for the selected supplier');
+    }
+    const booked = await adapter.bookFlight(claimed.offerSnapshot || {}, {});
+    if (!booked || booked.status !== 'SUCCESS' || !booked.pnr) {
+        paymentDoc.bookingConfirmStatus = 'FAILED';
+        paymentDoc.needsAttention = true;
+        await paymentDoc.save();
+        claimed.status = 'PAYMENT_CAPTURED_BOOKING_FAILED';
+        await claimed.save();
+        await writeLifecycleLog({
+          ...bookLog,
+          stage: 'SUPPLIER_RESPONSE',
+          direction: 'SUPPLIER',
+          status: 'FAILED',
+          storeRaw: true,
+          rawPayload: booked || { status: 'FAILED' },
+          errorCode: booked?.errorCode || 'MOCK_SUPPLIER_BOOK_FAILED',
+          errorMessage: booked?.errorMessage || 'Mock supplier did not confirm the booking',
+        });
+        await writeLifecycleLog({
+          ...bookLog,
+          stage: 'OUTBOUND_RESPONSE',
+          direction: 'INBOUND',
+          status: 'FAILED',
+          errorCode: booked?.errorCode || 'MOCK_SUPPLIER_BOOK_FAILED',
+          errorMessage: booked?.errorMessage || 'Mock supplier did not confirm the booking',
+          result: {
+            paymentRef: paymentDoc.paymentRef,
+            paymentStatus: PaymentStatus.SUCCESS,
+            recoverable: true,
+            pnr: null,
+          },
+        });
+        throw AppError.validation(
+          'Payment succeeded but the supplier did not confirm the booking.',
+          [
+            {
+              paymentRef: paymentDoc.paymentRef,
+              paymentStatus: PaymentStatus.SUCCESS,
+              bookingConfirmStatus: 'FAILED',
+              supplierError: booked?.errorCode || 'MOCK_SUPPLIER_BOOK_FAILED',
+              needsAttention: true,
+            },
+          ],
+        );
+      }
+      supplierBookingRef = booked.pnr;
+      if (claimed.offerSnapshot?.returnJourney) {
+        const returnBooked = await adapter.bookFlight(claimed.offerSnapshot.returnJourney, {});
+        if (!returnBooked || returnBooked.status !== 'SUCCESS' || !returnBooked.pnr) {
+          paymentDoc.bookingConfirmStatus = 'FAILED';
+          paymentDoc.needsAttention = true;
+          await paymentDoc.save();
+          claimed.status = 'PAYMENT_CAPTURED_BOOKING_FAILED';
+          await claimed.save();
+          throw AppError.validation(
+            'Payment succeeded but the supplier did not confirm the return journey.',
+            [
+              {
+                paymentRef: paymentDoc.paymentRef,
+                paymentStatus: PaymentStatus.SUCCESS,
+                bookingConfirmStatus: 'FAILED',
+                supplierError: returnBooked?.errorCode || 'MOCK_SUPPLIER_BOOK_FAILED',
+                needsAttention: true,
+              },
+            ],
+          );
+        }
+        claimed.offerSnapshot.returnJourney.supplierBookingRef = returnBooked.pnr;
+      }
+      await writeLifecycleLog({
+        ...bookLog,
+        stage: 'SUPPLIER_RESPONSE',
+        direction: 'SUPPLIER',
+        status: 'SUCCESS',
+        storeRaw: true,
+        rawPayload: booked,
+      });
+      await writeLifecycleLog({
+        ...bookLog,
+        stage: 'OUTBOUND_RESPONSE',
+        direction: 'INBOUND',
+        status: 'SUCCESS',
+        result: {
+          pnr: supplierBookingRef,
+          supplier: supplierCode,
+          bookingStatus: 'CONFIRMED',
+          testBooking: true,
+        },
+      });
+  }
 
   const clock = bookingClock(new Date(), charge.currency);
   const serviceName = serviceFolderName(claimed.productType);
@@ -367,11 +603,25 @@ async function confirmBookingFromCheckout({
       snapshot: claimed.offerSnapshot,
     },
   ];
+  const returnJourney = claimed.offerSnapshot?.returnJourney;
+  if (returnJourney?.supplierBookingRef) {
+    items.push({
+      productType: claimed.productType,
+      aplEntityId: returnJourney.aplFlightId,
+      aplOfferId: returnJourney.aplFareId,
+      supplierCode: returnJourney.supplier || supplierCode,
+      supplierBookingRef: returnJourney.supplierBookingRef,
+      supplierBookingStatus: 'CONFIRMED',
+      amount: returnJourney.chargedUnitAmount,
+      currency: charge.currency,
+      snapshot: returnJourney,
+    });
+  }
   const serviceRecord = {
     aplBookingRef,
     status: 'CONFIRMED',
-    currency: charge.currency,
-    totalAmount: charge.amount,
+    currency: baseCharge.currency,
+    totalAmount: baseCharge.amount,
     bookedAtUtc: clock.bookedAtUtc,
     bookedAtLocal: clock.bookedAtLocal,
     timeZone: clock.timeZone,
@@ -393,6 +643,14 @@ async function confirmBookingFromCheckout({
     serviceRecord.selectedSeat = (snap.selectedSeats || []).join(', ');
     serviceRecord.boardingPoint = snap.boardingPoint || null;
     serviceRecord.droppingPoint = snap.droppingPoint || null;
+    serviceRecord.originalBoardingPoint = snap.boardingPoint || null;
+    serviceRecord.originalDroppingPoint = snap.droppingPoint || null;
+    serviceRecord.boardingPoints = snap.boardingPoints || [];
+    serviceRecord.droppingPoints = snap.droppingPoints || [];
+    serviceRecord.departureAt = snap.departureAt || null;
+    serviceRecord.departureTimeZone = snap.departureTimeZone || null;
+    serviceRecord.pointChanges = [];
+    serviceRecord.pointRevision = 0;
     serviceRecord.busType = snap.busType || null;
     serviceRecord.searchQuery = {
       from: snap.departure?.city || '',
@@ -401,6 +659,16 @@ async function confirmBookingFromCheckout({
       travelDate: snap.travelDate || '',
       seats: serviceRecord.selectedSeat,
     };
+  }
+
+  if (claimed.productType === 'INSURANCE') {
+    const snap = claimed.offerSnapshot || {};
+    serviceRecord.title = `${snap.provider || 'Mock insurer'} · ${snap.planName || 'Demo plan'}`;
+    serviceRecord.demo = true;
+    serviceRecord.coverageNote = 'DEMO / MOCK. This is not an insurance policy or certificate.';
+    serviceRecord.destination = snap.destination || null;
+    serviceRecord.departureDate = snap.departureDate || null;
+    serviceRecord.returnDate = snap.returnDate || null;
   }
 
   if (claimed.productType === 'TRANSFER') {
@@ -416,6 +684,12 @@ async function confirmBookingFromCheckout({
     serviceRecord.pickupDateTime = snap.pickupDateTime || null;
     serviceRecord.flightNumber = snap.flightNumber || null;
     serviceRecord.pickupInstructions = snap.pickupInstructions || null;
+    serviceRecord.pickupContact = snap.pickupContact || null;
+    serviceRecord.pickupPoint = snap.pickupPoint || null;
+    serviceRecord.supplier = snap.supplier || '';
+    serviceRecord.supplierServiceId = snap.supplierServiceId || '';
+    serviceRecord.aplTransferId = snap.aplTransferId || null;
+    serviceRecord.aplOfferId = snap.aplOfferId || null;
     serviceRecord.searchQuery = {
       from: snap.pickup?.name || '',
       to: snap.dropoff?.name || '',
@@ -432,11 +706,24 @@ async function confirmBookingFromCheckout({
       customerProfileId: String(user._id),
       dsaId: claimed.dsaId || undefined,
       requestId: requestId || claimed.requestId || undefined,
+      journeyId: claimed.journeyId || undefined,
       productType: claimed.productType,
       status: 'CONFIRMED',
-      currency: charge.currency,
-      totalAmount: charge.amount,
-      commercialSnapshot: claimed.commercialSnapshot || undefined,
+      currency: baseCharge.currency,
+      totalAmount: baseCharge.amount,
+      commercialSnapshot: {
+        ...(claimed.commercialSnapshot || {}),
+        paymentCharge: {
+          method: charge.paymentMethod,
+          rateBps: charge.rateBps,
+          baseAmount: charge.baseAmount,
+          feeAmount: charge.paymentFee,
+          totalAmount: charge.amount,
+          currency: charge.currency,
+          provider: 'APL_MOCK_PAY',
+          simulated: true,
+        },
+      },
       bookedAtUtc: clock.bookedAtUtc,
       timeZone: clock.timeZone,
       bookedAtLocal: clock.bookedAtLocal,
@@ -447,6 +734,13 @@ async function confirmBookingFromCheckout({
       searchId: claimed.searchId,
       travellers: claimed.travellers,
       items,
+    });
+    const { settleBookingDebit } = require('../../wallet/dsa-agency-wallet.service');
+    await settleBookingDebit({
+      dsaId: claimed.dsaId,
+      aplBookingRef,
+      amountMajor: baseCharge.amount,
+      actor: { id: String(user._id), email: claimed.contact?.email || '' },
     });
   } catch (err) {
     paymentDoc.bookingConfirmStatus = 'FAILED';
@@ -491,8 +785,25 @@ async function confirmBookingFromCheckout({
   claimed.aplBookingRef = aplBookingRef;
   await claimed.save();
 
-  if (payment.method === 'WALLET') {
-    user.balance -= charge.amount;
+  let balanceAfter = user.balance;
+  if (charge.paymentMethod === 'WALLET') {
+    const debited = await CustomerWallet.findOneAndUpdate(
+      {
+        userId: user._id,
+        dsaId: claimed.dsaId,
+        currency: charge.currency,
+        balance: { $gte: charge.amount },
+      },
+      { $inc: { balance: -charge.amount, totalDebits: charge.amount } },
+      { new: true },
+    );
+    if (!debited) {
+      throw AppError.validation('Insufficient wallet balance', [
+        { requiredAmount: charge.amount, currency: charge.currency },
+      ]);
+    }
+    balanceAfter = debited.balance;
+    user.balance = debited.balance;
     await user.save();
   }
 
@@ -504,7 +815,7 @@ async function confirmBookingFromCheckout({
     productType: claimed.productType,
     amount: charge.amount,
     currency: charge.currency,
-    balanceAfter: user.balance,
+    balanceAfter,
     paymentMethod: payment.method,
     paymentStatus: PaymentStatus.SUCCESS,
     note:
@@ -638,6 +949,12 @@ function bookingItinerary(booking, searchRequest) {
       busType: saved.busType || itemSnap.busType || "",
       boardingPoint: saved.boardingPoint || itemSnap.boardingPoint || null,
       droppingPoint: saved.droppingPoint || itemSnap.droppingPoint || null,
+      boardingPoints: saved.boardingPoints || itemSnap.boardingPoints || [],
+      droppingPoints: saved.droppingPoints || itemSnap.droppingPoints || [],
+      departureAt: saved.departureAt || itemSnap.departureAt || null,
+      departureTimeZone: saved.departureTimeZone || itemSnap.departureTimeZone || null,
+      pointChangeAllowed: canChangePoints(saved.departureAt || itemSnap.departureAt),
+      pointChanges: saved.pointChanges || [],
       price: fareBreakdown(booking, null, []),
     };
   }
@@ -656,6 +973,7 @@ function bookingItinerary(booking, searchRequest) {
       vehicleCategory: saved.vehicleCategory || itemSnap.vehicleCategory || '',
       pickup: saved.pickup || itemSnap.pickup || null,
       dropoff: saved.dropoff || itemSnap.dropoff || null,
+      pickupPoint: saved.pickupPoint || itemSnap.pickupPoint || null,
       price: fareBreakdown(booking, null, []),
     };
   }
@@ -778,6 +1096,12 @@ function bookingCard(booking, payment, searchRequest) {
       snap.selectedRoom?.checkOut || snap.stay?.checkOut || searchRequest?.checkOut || '',
     ).slice(0, 10);
     if (!searchQuery.destination && searchRequest?.city) searchQuery.destination = searchRequest.city;
+  } else if (booking.productType === 'INSURANCE') {
+    const saved = booking.services?.insurance || {};
+    title = saved.title || snap.planName || 'Insurance demo';
+    searchQuery.destination = saved.destination || snap.destination || searchRequest?.destination || '';
+    searchQuery.depart = String(saved.departureDate || snap.departureDate || searchRequest?.departureDate || '').slice(0, 10);
+    searchQuery.date = searchQuery.depart;
   }
   const status = String(booking.status || '').toUpperCase();
   const today = new Intl.DateTimeFormat('en-CA', {
@@ -821,6 +1145,14 @@ function bookingCard(booking, payment, searchRequest) {
       title: traveller.title,
       firstName: traveller.firstName,
       lastName: traveller.lastName,
+      age: traveller.age,
+      beneficiary: traveller.beneficiary
+        ? {
+          firstName: traveller.beneficiary.firstName,
+          lastName: traveller.beneficiary.lastName,
+          relationship: traveller.beneficiary.relationship,
+        }
+        : null,
     })),
     guestEmail: booking.guestEmail,
     guestPhone: booking.guestPhone,

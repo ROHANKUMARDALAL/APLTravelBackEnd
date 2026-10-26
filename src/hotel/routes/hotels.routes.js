@@ -54,6 +54,8 @@ router.post(
   '/search',
   optionalLogin,
   asyncHandler(async (req, res) => {
+    req.logService = 'HOTEL';
+    req.businessOperation = 'SEARCH';
     const dto = validateHotelSearchBody(req.body);
     const forced = parseFailureHeader(req.header('x-simulate-supplier-failure'));
     const result = await searchHotels(dto, forced.length > 0 ? forced : undefined, {
@@ -63,12 +65,17 @@ router.post(
       tenant: req.tenant,
     });
     const publicResult = sanitizeHotelSearchForPublic(result);
+    req.businessOperation = 'SEARCH';
+    req.searchId = result.searchId;
+    req.journeyId = result.searchId;
     await logPublicSearchResult({
       requestId: req.requestId,
       dsaId: req.tenant?.dsaId,
       userId: req.user?._id,
       service: 'HOTEL',
       searchId: result.searchId,
+      journeyId: result.searchId,
+      businessOperation: 'SEARCH',
       payload: publicResult,
     });
     return sendSuccess(res, publicResult);
@@ -79,8 +86,15 @@ router.post(
 router.post(
   '/details',
   asyncHandler(async (req, res) => {
+    req.logService = 'HOTEL';
+    req.businessOperation = 'DETAILS';
+    req.searchId = req.body?.searchId;
+    req.journeyId = req.body?.searchId;
     const dto = validateHotelDetailsBody(req.body);
-    return sendSuccess(res, await getHotelDetails(dto, { tenant: req.tenant }));
+    const details = await getHotelDetails(dto, { tenant: req.tenant });
+    req.searchId = details.searchId || req.searchId;
+    req.journeyId = details.searchId || req.journeyId;
+    return sendSuccess(res, details);
   }),
 );
 
@@ -88,8 +102,18 @@ router.post(
 router.post(
   '/revalidate',
   asyncHandler(async (req, res) => {
+    req.logService = 'HOTEL';
+    req.businessOperation = 'RECHECK';
+    req.searchId = req.body?.searchId;
+    req.journeyId = req.body?.searchId;
     const dto = validateHotelRoomLookup(req.body);
-    return sendSuccess(res, await revalidateHotelOffer(dto, { tenant: req.tenant }));
+    const checked = await revalidateHotelOffer(dto, {
+      tenant: req.tenant,
+      supplier: req.body?.supplier || null,
+    });
+    req.searchId = checked.searchId || req.searchId;
+    req.journeyId = checked.searchId || req.journeyId;
+    return sendSuccess(res, checked);
   }),
 );
 
@@ -97,15 +121,19 @@ router.post(
 router.post(
   '/checkout',
   asyncHandler(async (req, res) => {
+    req.logService = 'HOTEL';
+    req.businessOperation = 'CHECKOUT';
+    req.searchId = req.body?.searchId;
+    req.journeyId = req.body?.searchId;
     const dto = validateHotelCheckoutBody(req.body);
-    return sendSuccess(
-      res,
-      await checkoutHotel(dto, {
+    const session = await checkoutHotel(dto, {
         tenant: req.tenant,
         requestId: req.requestId,
         couponCode: req.body?.couponCode,
-      }),
-    );
+      });
+    req.searchId = session.searchId || req.searchId;
+    req.journeyId = session.journeyId || session.searchId || req.journeyId;
+    return sendSuccess(res, session);
   }),
 );
 
@@ -114,14 +142,18 @@ router.post(
   '/book',
   requireLogin,
   asyncHandler(async (req, res) => {
+    req.logService = 'HOTEL';
+    req.businessOperation = 'BOOK';
+    req.searchId = req.body?.searchId;
     const dto = validateHotelBookBody(req.body);
-    return sendSuccess(
-      res,
-      await bookHotel(dto, req.user, {
-        tenant: req.tenant,
-        requestId: req.requestId,
-      }),
-    );
+    const booked = await bookHotel(dto, req.user, {
+      tenant: req.tenant,
+      requestId: req.requestId,
+    });
+    req.businessOperation = 'BOOK';
+    req.searchId = booked.searchId || req.body?.searchId;
+    req.journeyId = booked.journeyId || booked.searchId || req.body?.searchId;
+    return sendSuccess(res, booked);
   }),
 );
 

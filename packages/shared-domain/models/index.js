@@ -8,4 +8,6 @@ module.exports = {
   Dsa: require('./Dsa'),
   Service: require('./Service'),
   DsaService: require('./DsaService'),
+  HolidayPackage: require('./HolidayPackage'),
+  Enquiry: require('./Enquiry'),
 };

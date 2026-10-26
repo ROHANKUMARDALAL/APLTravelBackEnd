@@ -179,6 +179,28 @@ async function listBookings({ query = {}, dsaScope = null, audience = 'APL' }) {
   };
 }
 
+function busPointDetail(booking, item) {
+  if (booking.productType !== 'BUS') return null;
+  const saved = booking.services?.bus || {};
+  const snap = item?.snapshot || {};
+  const history = Array.isArray(saved.pointChanges) ? saved.pointChanges : [];
+  const last = history.length ? history[history.length - 1] : null;
+  const boardingPoint = saved.boardingPoint || snap.boardingPoint || null;
+  const droppingPoint = saved.droppingPoint || snap.droppingPoint || null;
+  return {
+    originalBoardingPoint: saved.originalBoardingPoint || history[0]?.oldBoarding || boardingPoint,
+    originalDroppingPoint: saved.originalDroppingPoint || history[0]?.oldDropping || droppingPoint,
+    boardingPoint,
+    droppingPoint,
+    boardingPoints: saved.boardingPoints || snap.boardingPoints || [],
+    droppingPoints: saved.droppingPoints || snap.droppingPoints || [],
+    departureAt: saved.departureAt || snap.departureAt || null,
+    pointChanges: history,
+    modificationStatus: history.length ? 'CHANGED' : 'UNCHANGED',
+    modifiedAt: last?.at || null,
+  };
+}
+
 async function getBookingDetail({
   aplBookingRef,
   dsaScope = null,
@@ -241,6 +263,8 @@ async function getBookingDetail({
     },
     commercial: commercialForAudience(booking.commercialSnapshot, audience),
     payment: toPublicPayment(payment),
+    paymentCharge: booking.commercialSnapshot?.paymentCharge || null,
+    bus: busPointDetail(booking, item),
     cancellations: cancellations.map(toPublicCancellation),
     refunds: refunds.map(toPublicRefund),
     timeline: buildTimeline({ booking, payment, cancellations, refunds }),

@@ -1,7 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
-const { SERVICE_GLOBAL_STATUSES } = require('../constants/services');
+const { SERVICE_GLOBAL_STATUSES, SERVICE_MODES } = require('../constants/services');
 
 const ServiceSchema = new mongoose.Schema(
   {
@@ -33,6 +33,15 @@ const ServiceSchema = new mongoose.Schema(
       index: true,
     },
     displayOrder: { type: Number, required: true, default: 100, min: 0 },
+    /**
+     * How the storefront should treat the service.
+     * API_BOOKING does not mean a live supplier is connected.
+     */
+    serviceMode: {
+      type: String,
+      enum: SERVICE_MODES,
+      default: undefined,
+    },
     metadata: {
       type: Map,
       of: mongoose.Schema.Types.Mixed,

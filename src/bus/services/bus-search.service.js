@@ -4,7 +4,6 @@ const crypto = require('crypto');
 const { config } = require('../../common/config');
 const { AppError, ErrorCode } = require('../../common/errors/app-error');
 const { formatAplSearchId } = require('../../common/utils/apl-ids');
-const { getAllBusAdapters } = require('../suppliers/registry');
 const { normalizeCandidate } = require('../utils/bus-normalization');
 const { resolveBuses } = require('../utils/bus-entity-resolution');
 const {
@@ -18,6 +17,7 @@ const { writeLifecycleLog } = require('../../common/services/lifecycle-log.servi
 const {
   buildSupplierExecutionPlan,
 } = require('../../suppliers/services/supplier-routing.service');
+const { executeSupplierPlan } = require('../../suppliers/services/supplier-execution.service');
 const {
   resolveSupplierCredentials,
 } = require('../../suppliers/runtime');
@@ -111,6 +111,8 @@ async function searchBuses(dto, forcedFailureList, context = {}) {
     stage: 'NORMALIZED_REQUEST',
     direction: 'INBOUND',
     requestId: context.requestId,
+    journeyId: aplSearchId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'BUS',
@@ -120,26 +122,14 @@ async function searchBuses(dto, forcedFailureList, context = {}) {
     request: criteria,
   });
 
-  let plan;
-  if (context.dsaId) {
-    plan = await buildSupplierExecutionPlan({
-      dsaId: context.dsaId,
-      serviceCode: 'bus',
-      operation: 'searchBuses',
-    });
-  } else {
-    plan = {
-      mode: 'LEGACY_MOCK_FANOUT',
-      reason: 'NO_TRANSACTION_TENANT',
-      strategy: 'PARALLEL',
-      suppliers: getAllBusAdapters().map((adapter, index) => ({
-        supplierCode: adapter.code,
-        priority: index + 1,
-        adapter,
-        supplierId: null,
-      })),
-    };
+  if (!context.dsaId) {
+    throw AppError.noSupplier('No supplier is assigned for this service');
   }
+  const plan = await buildSupplierExecutionPlan({
+    dsaId: context.dsaId,
+    serviceCode: 'bus',
+    operation: 'searchBuses',
+  });
 
   const adapterContext = {
     requestId: context.requestId,
@@ -150,8 +140,9 @@ async function searchBuses(dto, forcedFailureList, context = {}) {
     routingStrategy: plan.strategy,
   };
 
-  const settled = await Promise.all(
-    plan.suppliers.map(async (entry) => {
+  const executed = await executeSupplierPlan(plan, {
+    isUsable: (outcome) => outcome?.status === 'SUCCESS' && (outcome.buses || []).length > 0,
+    invoke: async (entry) => {
       const adapter = entry.adapter;
       const started = Date.now();
       try {
@@ -163,7 +154,6 @@ async function searchBuses(dto, forcedFailureList, context = {}) {
           environment: entry.environment || 'TEST',
           supplierCode: entry.supplierCode || adapter.code,
         });
-
         const outcome = await adapter.searchBuses(criteria, {
           simulateFailure: forcedFailures.has(adapter.code),
           ...adapterContext,
@@ -172,30 +162,19 @@ async function searchBuses(dto, forcedFailureList, context = {}) {
           credentialRef,
           credentialMeta: resolved.meta,
         });
-
-        return {
-          adapter,
-          supplierId: entry.supplierId || null,
-          outcome: {
-            ...outcome,
-            durationMs: outcome.durationMs || Date.now() - started,
-          },
-        };
+        return { ...outcome, durationMs: outcome.durationMs || Date.now() - started };
       } catch (err) {
         return {
-          adapter,
-          supplierId: entry.supplierId || null,
-          outcome: {
-            status: 'FAILED',
-            durationMs: Date.now() - started,
-            errorCode: 'ADAPTER_EXCEPTION',
-            errorMessage: err.message,
-            buses: [],
-          },
+          status: 'FAILED',
+          durationMs: Date.now() - started,
+          errorCode: 'ADAPTER_EXCEPTION',
+          errorMessage: err.message,
+          buses: [],
         };
       }
-    }),
-  );
+    },
+  });
+  const settled = executed.settled;
 
   const candidates = [];
   const supplierMeta = [];
@@ -255,6 +234,7 @@ async function searchBuses(dto, forcedFailureList, context = {}) {
 
   await Search.create({
     aplSearchId,
+    journeyId: aplSearchId,
     type: 'BUS',
     status,
     dsaId: context.dsaId || undefined,
@@ -276,6 +256,8 @@ async function searchBuses(dto, forcedFailureList, context = {}) {
 
   await logSupplierOutcomes({
     requestId: context.requestId,
+    journeyId: aplSearchId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'BUS',
@@ -289,6 +271,8 @@ async function searchBuses(dto, forcedFailureList, context = {}) {
     stage: 'NORMALIZED_RESPONSE',
     direction: 'SUPPLIER',
     requestId: context.requestId,
+    journeyId: aplSearchId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'BUS',
@@ -340,6 +324,12 @@ async function revalidateBusOffer(dto, context = {}) {
   }
   if ((offer.seatsLeft || 0) < 1) {
     throw AppError.validation('No seats left on this offer.');
+  }
+  if (
+    context.supplier
+    && String(context.supplier).toUpperCase() !== String(offer.supplier || '').toUpperCase()
+  ) {
+    throw AppError.validation('Selected supplier does not match this offer');
   }
 
   // Re-price from stored supplierPrice using current rules for revalidation,

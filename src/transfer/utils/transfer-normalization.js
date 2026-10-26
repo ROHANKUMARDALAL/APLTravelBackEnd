@@ -21,6 +21,7 @@ function normalizeCandidate(raw, supplierCode) {
     inclusions: Array.isArray(raw.inclusions) ? raw.inclusions : [],
     pickup: raw.pickup || null,
     dropoff: raw.dropoff || null,
+    pickupPoints: Array.isArray(raw.pickupPoints) ? raw.pickupPoints : [],
     pickupDateTime: raw.pickupDateTime || null,
     supplierPrice: { amount, currency },
     cancellationNote:

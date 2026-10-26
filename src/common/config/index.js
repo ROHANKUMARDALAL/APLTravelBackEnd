@@ -80,6 +80,7 @@ function loadConfig() {
     publicDevHostMap,
     /** Default HTTP timeout for real supplier calls (Phase 11A). */
     supplierHttpTimeoutMs: asNumber(process.env.SUPPLIER_HTTP_TIMEOUT_MS, 15_000),
+    supplierSearchConcurrency: asNumber(process.env.SUPPLIER_SEARCH_CONCURRENCY, 4),
     /**
      * Legacy per-code env placeholders (Phase 11 TEST). Prefer
      * SUPPLIER_{CODE}_{ENV}_* via credential-resolver.

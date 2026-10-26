@@ -314,13 +314,15 @@ describeDb('Phase 10 supplier platform', () => {
       {},
     );
 
-    let plan = await buildSupplierExecutionPlan({
-      dsaId,
-      serviceCode: 'flight',
-      operation: 'search',
-    });
-    // No adapters for P10A/P10B codes → eligible empty → dev fallback
-    assert.ok(plan.mode === 'DSA_ASSIGNED' || plan.mode === 'LEGACY_MOCK_FANOUT');
+    await assert.rejects(
+      () => buildSupplierExecutionPlan({
+        dsaId,
+        serviceCode: 'flight',
+        operation: 'search',
+      }),
+      (error) => error.code === 'NO_SUPPLIER_ASSIGNED',
+    );
+    let plan;
 
     // Use real mock suppliers with adapters
     const tbo = await Supplier.findOne({ code: 'TBO' });
@@ -376,10 +378,9 @@ describeDb('Phase 10 supplier platform', () => {
       { supplierId: String(tj._id), serviceId: flightId, enabled: false },
       {},
     );
-    plan = await buildSupplierExecutionPlan({ dsaId, serviceCode: 'flight' });
-    // No eligible → legacy mock in non-production
-    assert.ok(
-      plan.mode === 'LEGACY_MOCK_FANOUT' || plan.suppliers.length === 0,
+    await assert.rejects(
+      () => buildSupplierExecutionPlan({ dsaId, serviceCode: 'flight' }),
+      (error) => error.code === 'NO_SUPPLIER_ASSIGNED',
     );
     // restore
     await catalog.upsertSupplierServiceMapping(

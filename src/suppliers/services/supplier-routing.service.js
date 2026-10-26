@@ -2,7 +2,6 @@
 
 const { Types } = require('mongoose');
 const { AppError } = require('../../common/errors/app-error');
-const { config } = require('../../common/config');
 const Supplier = require('../../common/database/models/Supplier');
 const SupplierService = require('../../common/database/models/SupplierService');
 const DsaSupplier = require('../../common/database/models/DsaSupplier');
@@ -17,13 +16,11 @@ const {
 } = require('../runtime');
 
 /**
- * Central supplier routing (Phase 10).
+ * Central supplier routing (Phase 20).
  *
- * Legacy mock fan-out is used ONLY when:
- * - NODE_ENV !== production AND
- * - no enabled DsaSupplier rows exist for the DSA+service
- *
- * Production never fail-opens past DSA supplier restrictions.
+ * Eligible suppliers come only from enabled DsaSupplier rows for this DSA.
+ * There is no development fallback to unassigned mock adapters.
+ * Explicitly assigned mock suppliers remain eligible.
  */
 
 function assertObjectId(value, field) {
@@ -42,29 +39,10 @@ function adaptersForService(serviceCode) {
   return [];
 }
 
-function legacyMockPlan({ serviceCode, operation, reason }) {
-  const adapters = adaptersForService(serviceCode);
-  return {
-    mode: 'LEGACY_MOCK_FANOUT',
-    reason,
-    strategy: 'PARALLEL',
-    environment: 'TEST',
-    serviceCode: String(serviceCode || '').toLowerCase(),
-    operation,
-    suppliers: adapters.map((adapter, index) => ({
-      supplierId: null,
-      supplierCode: adapter.code,
-      name: adapter.displayName || adapter.code,
-      priority: index + 1,
-      isMock: true,
-      environment: 'TEST',
-      adapter,
-    })),
-  };
-}
-
 /**
- * Build eligible supplier execution plan for a DSA + service.
+ * Build the eligible supplier plan for a DSA + service.
+ * Strategy is taken from the highest-priority enabled assignment.
+ * The executor, not this plan, decides how many of those suppliers are called.
  */
 async function buildSupplierExecutionPlan({
   dsaId,
@@ -88,14 +66,9 @@ async function buildSupplierExecutionPlan({
     .lean();
 
   if (!assignments.length) {
-    if (config.isProduction) {
-      throw AppError.forbidden('No suppliers are assigned for this service');
-    }
-    return legacyMockPlan({
-      serviceCode: code,
-      operation,
-      reason: 'NO_DSA_SUPPLIER_ASSIGNMENTS_DEV_FALLBACK',
-    });
+    throw AppError.noSupplier('No supplier is assigned for this service', [
+      { reason: 'NO_SUPPLIER_ASSIGNED', serviceCode: code },
+    ]);
   }
 
   const strategy = assignments[0].routingStrategy || 'PARALLEL';
@@ -168,21 +141,12 @@ async function buildSupplierExecutionPlan({
   }
 
   if (!eligible.length) {
-    if (config.isProduction) {
-      throw AppError.forbidden('No eligible suppliers for this service');
-    }
-    return legacyMockPlan({
-      serviceCode: code,
-      operation,
-      reason: 'NO_ELIGIBLE_SUPPLIERS_DEV_FALLBACK',
-    });
+    throw AppError.noSupplier('No eligible supplier is assigned for this service', [
+      { reason: 'NO_ELIGIBLE_SUPPLIER', serviceCode: code },
+    ]);
   }
 
-  // Deterministic priority ordering
   eligible.sort((a, b) => a.priority - b.priority || a.supplierCode.localeCompare(b.supplierCode));
-
-  // Phase 10: execute all eligible mocks for observability regardless of strategy.
-  // PRIORITY/FALLBACK remain explicit on the plan for Phase 11 short-circuit behavior.
   const planned = eligible;
 
   return {
@@ -198,5 +162,4 @@ async function buildSupplierExecutionPlan({
 
 module.exports = {
   buildSupplierExecutionPlan,
-  legacyMockPlan,
 };

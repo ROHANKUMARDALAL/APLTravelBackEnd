@@ -93,6 +93,9 @@ function sumSelected(catalog, codes, label) {
         `Allowed: ${catalog.map((row) => row.code).join(', ')}`,
       ]);
     }
+    if (item.status === 'OCCUPIED') {
+      throw AppError.validation(`Seat ${identity.code} is not available on this segment`);
+    }
     selected.push({
       ...item,
       passengerKey: identity.passengerKey || null,

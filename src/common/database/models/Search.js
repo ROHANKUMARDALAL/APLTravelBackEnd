@@ -27,7 +27,7 @@ const SearchSchema = new mongoose.Schema(
     aplSearchId: { type: String, required: true, unique: true, index: true },
     type: {
       type: String,
-      enum: ['HOTEL', 'FLIGHT', 'BUS', 'TRANSFER'],
+      enum: ['HOTEL', 'FLIGHT', 'BUS', 'TRANSFER', 'INSURANCE'],
       required: true,
     },
     status: {
@@ -48,6 +48,9 @@ const SearchSchema = new mongoose.Schema(
       index: true,
     },
     requestId: { type: String, index: true },
+    journeyId: { type: String, index: true },
+    /** Offer locks and operation request ids. One search can own several booking journeys. */
+    journeys: { type: [mongoose.Schema.Types.Mixed], default: [] },
     request: { type: mongoose.Schema.Types.Mixed, required: true },
     /** Cached canonical results for details / revalidate / checkout. */
     results: { type: mongoose.Schema.Types.Mixed, default: null },

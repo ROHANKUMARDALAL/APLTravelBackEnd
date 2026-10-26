@@ -18,6 +18,7 @@ const { writeLifecycleLog } = require('../../common/services/lifecycle-log.servi
 const {
   buildSupplierExecutionPlan,
 } = require('../../suppliers/services/supplier-routing.service');
+const { executeSupplierPlan } = require('../../suppliers/services/supplier-execution.service');
 const {
   resolveSupplierCredentials,
 } = require('../../suppliers/runtime');
@@ -105,6 +106,8 @@ async function searchTransfers(dto, forcedFailureList, context = {}) {
     stage: 'NORMALIZED_REQUEST',
     direction: 'INBOUND',
     requestId: context.requestId,
+    journeyId: aplSearchId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'TRANSFER',
@@ -114,6 +117,9 @@ async function searchTransfers(dto, forcedFailureList, context = {}) {
     request: criteria,
   });
 
+  if (!context.dsaId) {
+    throw AppError.noSupplier('No supplier is assigned for this service');
+  }
   const plan = await buildSupplierExecutionPlan({
     dsaId: context.dsaId,
     serviceCode: 'transfer',
@@ -126,8 +132,9 @@ async function searchTransfers(dto, forcedFailureList, context = {}) {
     routingStrategy: plan.strategy,
   };
 
-  const settled = await Promise.all(
-    plan.suppliers.map(async (entry) => {
+  const executed = await executeSupplierPlan(plan, {
+    isUsable: (outcome) => outcome?.status === 'SUCCESS' && (outcome.transfers || []).length > 0,
+    invoke: async (entry) => {
       const adapter = entry.adapter;
       const started = Date.now();
       try {
@@ -139,7 +146,6 @@ async function searchTransfers(dto, forcedFailureList, context = {}) {
           environment: entry.environment || 'TEST',
           supplierCode: entry.supplierCode || adapter.code,
         });
-
         const outcome = await adapter.searchTransfers(criteria, {
           simulateFailure: forcedFailures.has(adapter.code),
           ...adapterContext,
@@ -148,30 +154,19 @@ async function searchTransfers(dto, forcedFailureList, context = {}) {
           credentialRef,
           credentialMeta: resolved.meta,
         });
-
-        return {
-          adapter,
-          supplierId: entry.supplierId || null,
-          outcome: {
-            ...outcome,
-            durationMs: outcome.durationMs || Date.now() - started,
-          },
-        };
+        return { ...outcome, durationMs: outcome.durationMs || Date.now() - started };
       } catch (err) {
         return {
-          adapter,
-          supplierId: entry.supplierId || null,
-          outcome: {
-            status: 'FAILED',
-            durationMs: Date.now() - started,
-            errorCode: 'ADAPTER_EXCEPTION',
-            errorMessage: err.message,
-            transfers: [],
-          },
+          status: 'FAILED',
+          durationMs: Date.now() - started,
+          errorCode: 'ADAPTER_EXCEPTION',
+          errorMessage: err.message,
+          transfers: [],
         };
       }
-    }),
-  );
+    },
+  });
+  const settled = executed.settled;
 
   const candidates = [];
   const supplierMeta = [];
@@ -232,6 +227,7 @@ async function searchTransfers(dto, forcedFailureList, context = {}) {
 
   await Search.create({
     aplSearchId,
+    journeyId: aplSearchId,
     type: 'TRANSFER',
     status,
     dsaId: context.dsaId || undefined,
@@ -253,6 +249,8 @@ async function searchTransfers(dto, forcedFailureList, context = {}) {
 
   await logSupplierOutcomes({
     requestId: context.requestId,
+    journeyId: aplSearchId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'TRANSFER',
@@ -266,6 +264,8 @@ async function searchTransfers(dto, forcedFailureList, context = {}) {
     stage: 'NORMALIZED_RESPONSE',
     direction: 'SUPPLIER',
     requestId: context.requestId,
+    journeyId: aplSearchId,
+    businessOperation: 'SEARCH',
     dsaId: context.dsaId,
     userId: context.userId,
     service: 'TRANSFER',
@@ -308,6 +308,12 @@ async function revalidateTransferOffer(dto, context = {}) {
   const offer = findOfferOnTransfer(transfer, dto.aplOfferId);
   if (!offer) {
     throw AppError.validation('Selected transfer offer is no longer available.');
+  }
+  if (
+    context.supplier
+    && String(context.supplier).toUpperCase() !== String(offer.supplier || transfer.supplier || '').toUpperCase()
+  ) {
+    throw AppError.validation('Selected supplier does not match this offer');
   }
 
   const pricingContext = await createPricingContext({

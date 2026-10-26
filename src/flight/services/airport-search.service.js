@@ -26,7 +26,11 @@ function searchCityAirports(dto) {
     query: dto.query || null,
     cityCode: dto.cityCode || null,
     cities: result.cities,
-    airports: result.airports,
+      airports: (result.airports || []).map((airport) => ({
+        ...airport,
+        iata: airport.airportCode,
+        label: `${airport.airportName} (${airport.airportCode}), ${airport.cityName}`,
+      })),
     tip: 'Use cityCode (e.g. DEL) in POST /api/v1/flights/search as originCityCode / destinationCityCode to search all airports in that metro.',
   };
 }

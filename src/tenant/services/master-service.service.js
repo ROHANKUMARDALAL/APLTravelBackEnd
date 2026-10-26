@@ -4,6 +4,7 @@ const { Types } = require('mongoose');
 const { AppError } = require('../../common/errors/app-error');
 const Service = require('../models/Service');
 const { SERVICE_GLOBAL_STATUSES } = require('../models/Service');
+const { isServiceAlias, canonicalServiceCode, SERVICE_MODES, serviceModeForCode } = require('@apl/shared-domain');
 
 function assertObjectId(value, field = 'id') {
   if (!Types.ObjectId.isValid(value)) {
@@ -22,6 +23,7 @@ function toPublicService(svc) {
     icon: svc.icon || '',
     globalStatus: svc.globalStatus,
     displayOrder: svc.displayOrder,
+    serviceMode: serviceModeForCode(svc.code, svc.serviceMode),
     createdAt: svc.createdAt,
     updatedAt: svc.updatedAt,
   };
@@ -68,6 +70,9 @@ async function createMasterService(input = {}) {
     throw AppError.validation('Invalid service code format');
   }
   if (!name) throw AppError.validation('name is required');
+  if (isServiceAlias(code)) {
+    throw AppError.validation(`Use the canonical service code ${canonicalServiceCode(code)}`);
+  }
 
   const slug = slugify(input.slug || name || code);
   if (!slug) throw AppError.validation('slug is required');
@@ -89,6 +94,9 @@ async function createMasterService(input = {}) {
         input.displayOrder === undefined || input.displayOrder === null
           ? 100
           : Number(input.displayOrder),
+      serviceMode: SERVICE_MODES.includes(String(input.serviceMode || '').toUpperCase())
+        ? String(input.serviceMode).toUpperCase()
+        : serviceModeForCode(code),
     });
   } catch (error) {
     if (error && error.code === 11000) {

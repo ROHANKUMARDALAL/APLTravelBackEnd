@@ -3,6 +3,19 @@
 const { AppError, ErrorCode } = require('../errors/app-error');
 const { sendFailure } = require('../response/envelope');
 
+function isDatabaseUnavailable(err) {
+  const name = String(err?.name || '');
+  const message = String(err?.message || '');
+  return (
+    name === 'MongoNotConnectedError' ||
+    name === 'MongooseServerSelectionError' ||
+    name === 'MongoServerSelectionError' ||
+    name === 'MongoNetworkError' ||
+    /buffering timed out/i.test(message) ||
+    /Client must be connected/i.test(message)
+  );
+}
+
 function notFoundHandler(req, res, _next) {
   return sendFailure(res, 404, {
     code: ErrorCode.NOT_FOUND,
@@ -27,6 +40,10 @@ function errorHandler(err, req, res, _next) {
     if (status === 402) {
       code = 'PAYMENT_FAILED';
     }
+  } else if (isDatabaseUnavailable(err)) {
+    status = 503;
+    code = ErrorCode.DATABASE_UNAVAILABLE;
+    message = 'Database is not available';
   } else if (err?.name === 'ValidationError' && err.errors) {
     status = 400;
     code = ErrorCode.VALIDATION_ERROR;

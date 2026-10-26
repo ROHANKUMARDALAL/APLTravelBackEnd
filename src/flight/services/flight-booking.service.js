@@ -20,6 +20,7 @@ const {
 } = require('../../pricing/services/pricing-engine.service');
 const { toMinor, toMajor } = require('../../pricing/money');
 const Search = require('../../common/database/models/Search');
+const { assertSameSupplier } = require('./flight-journey.policy');
 
 const FARE_TIER_MULTIPLIERS = [1, 1.08, 1.18, 1.26];
 
@@ -156,7 +157,17 @@ function quoteFlightPrice(dto, fare, { lockUnit = false } = {}) {
 
 async function checkoutFlight(dto, context = {}) {
   const details = await getFlightDetails(dto, context);
-  await revalidateFlightOffer(dto, context);
+  const confirmed = await revalidateFlightOffer(dto, {
+    ...context,
+    dsaId: context.tenant?.dsaId,
+    clientJourneyId: dto.journeyId || null,
+    acceptPriceChange: dto.acceptPriceChange === true,
+  });
+  if (confirmed.requiresAcceptance || confirmed.status === 'PRICE_CHANGED') {
+    throw AppError.validation(
+      `The fare changed from ${confirmed.previousPrice?.amount} to ${confirmed.price?.amount} ${confirmed.price?.currency || ''}. Accept the updated fare before checkout.`,
+    );
+  }
 
   const fare = resolveSelectedFare(details, dto);
   if (!fare) {
@@ -190,10 +201,9 @@ async function checkoutFlight(dto, context = {}) {
       code: context.couponCode,
       customerId: context.userId,
     });
-    pricingContext.coupon = loaded.input;
     context.couponRecord = loaded.coupon;
   }
-  const supplierPrice = fare.supplierPrice || {
+  const supplierPrice = confirmed.supplierPrice || fare.supplierPrice || {
     amount: Number(fare.price?.amount) || 0,
     currency: fare.price?.currency || 'INR',
   };
@@ -226,6 +236,68 @@ async function checkoutFlight(dto, context = {}) {
   };
 
   const quote = quoteFlightPrice(dto, fareForQuote, { lockUnit: true });
+  let returnJourney = null;
+  if (dto.returnOffer) {
+    const returnDetails = await getFlightDetails(dto.returnOffer, context);
+    const returnConfirmed = await revalidateFlightOffer(dto.returnOffer, {
+      ...context,
+      dsaId: context.tenant?.dsaId,
+      clientJourneyId: confirmed.journeyId,
+      asReturn: true,
+      acceptPriceChange: dto.acceptPriceChange === true,
+    });
+    if (returnConfirmed.requiresAcceptance || returnConfirmed.status === 'PRICE_CHANGED') {
+      throw AppError.validation('The return fare changed. Accept the updated fare before checkout.');
+    }
+    const returnFare = resolveSelectedFare(returnDetails, dto.returnOffer);
+    if (!returnFare) throw AppError.validation('Return fare was not found');
+    assertSameSupplier(fare.supplier, returnFare.supplier);
+    const returnContext = await createPricingContext({
+      dsaId: context.tenant?.dsaId || null,
+      serviceCode: 'flight',
+      tripType: 'ONEWAY',
+      originCode: returnDetails.flight?.departure?.airport || null,
+      destinationCode: returnDetails.flight?.arrival?.airport || null,
+      customerId: context.userId || null,
+    });
+    const returnPriced = calculatePrice({
+      supplierPrice: returnFare.supplierPrice || {
+        amount: Number(returnFare.price?.amount) || 0,
+        currency: returnFare.price?.currency || 'INR',
+      },
+      supplierCode: returnFare.supplier || null,
+      airlineCode: returnDetails.flight?.airline?.code || null,
+      context: returnContext,
+      includeInternal: true,
+    });
+    const returnTier = familyTier[String(returnFare.fareType || '').toUpperCase()] || 1;
+    const returnUnit = toMajor(Math.round(toMinor(returnPriced.customerPrice.amount) * returnTier));
+    const returnBase = returnUnit * quote.payableTravellers;
+    quote.baseAmount += returnBase;
+    quote.amount += returnBase;
+    returnJourney = {
+      aplFlightId: returnDetails.aplFlightId,
+      aplFareId: returnFare.aplFareId,
+      supplierOfferId: returnFare.supplierOfferId || null,
+      supplier: returnFare.supplier,
+      chargedUnitAmount: returnUnit,
+      flight: returnDetails.flight,
+    };
+  }
+  if (context.couponRecord) {
+    const { quoteFlightFamilyCoupon, MESSAGES } = require('../../pricing/services/coupon.service');
+    const couponQuote = quoteFlightFamilyCoupon({
+      fare: { fareType: fare.fareType, price: { amount: engineUnit } },
+      priced,
+      coupon: context.couponRecord,
+      passengers: quote.payableTravellers,
+    });
+    if (couponQuote.couponStatus === 'COUPON_CANNOT_COMBINE') throw AppError.validation(MESSAGES.COMBINE);
+    if (couponQuote.couponStatus === 'COUPON_MINIMUM_NOT_MET') throw AppError.validation(MESSAGES.MINIMUM);
+    if (couponQuote.couponStatus === 'COUPON_NO_REMAINING_MARGIN') throw AppError.validation(MESSAGES.MARGIN);
+    quote.couponSavings = couponQuote.couponSavings;
+    quote.amount = toMajor(toMinor(quote.amount) - toMinor(couponQuote.couponSavings));
+  }
   assertExactPrice(quote, dto.confirmPrice);
   let couponRedemptionKey = null;
   if (context.couponRecord) {
@@ -253,10 +325,23 @@ async function checkoutFlight(dto, context = {}) {
     aplEntityId: details.aplFlightId,
     dsaId: context.tenant?.dsaId,
     requestId: context.requestId,
+    journeyId: confirmed.journeyId,
+    userId: context.userId,
     contact: dto.contact,
     travellers: dto.travellers,
     commercialSnapshot: {
       ...priced.commercialSnapshot,
+      coupon: context.couponRecord
+        ? {
+            amount: quote.couponSavings || 0,
+            currency: quote.currency,
+            code: context.couponRecord.code,
+            status: quote.couponSavings > 0 ? 'APPLIED' : 'COUPON_NO_REMAINING_MARGIN',
+            adjustmentType: context.couponRecord.adjustmentType,
+            value: context.couponRecord.value,
+            maxAmount: context.couponRecord.maxAmount ?? null,
+          }
+        : priced.commercialSnapshot.coupon,
       unitAmount: chargedUnitAmount,
       payableTravellers: quote.payableTravellers,
       addonsAmount: quote.addonsAmount,
@@ -289,12 +374,13 @@ async function checkoutFlight(dto, context = {}) {
       fareRules: details.fareRules,
       addOns: quote.selectedAddOns,
       supplier: fare.supplier,
+      returnJourney,
     },
   });
 }
 
 async function bookFlight(dto, user, context = {}) {
-  return confirmBookingFromCheckout({
+  const result = await confirmBookingFromCheckout({
     checkoutToken: dto.checkoutToken,
     payment: dto.payment,
     confirmPrice: dto.confirmPrice,
@@ -304,6 +390,11 @@ async function bookFlight(dto, user, context = {}) {
     idempotencyKey: dto.idempotencyKey || dto.payment?.idempotencyKey,
     simulateBookingFailure: dto.simulateBookingFailure,
   });
+  return {
+    ...result,
+    testBooking: true,
+    notice: 'TEST / MOCK BOOKING. This is not a valid airline ticket.',
+  };
 }
 
 async function listFlightBookings(userId, context = {}) {

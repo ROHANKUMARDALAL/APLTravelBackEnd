@@ -13,8 +13,10 @@ const {
   searchFlights,
   getFlightDetails,
   revalidateFlightOffer,
+  getFlightSsr,
   sanitizeFlightSearchForPublic,
 } = require('../services/flight-search.service');
+const { blockFlight } = require('../services/flight-block.service');
 const {
   checkoutFlight,
   bookFlight,
@@ -52,6 +54,17 @@ router.post(
   }),
 );
 
+router.get(
+  '/airports',
+  asyncHandler(async (req, res) => {
+    const dto = validateAirportSearchBody({
+      query: req.query.query,
+      cityCode: req.query.cityCode,
+    });
+    return sendSuccess(res, searchCityAirports(dto));
+  }),
+);
+
 /**
  * Step 2 — search flights by metro city codes (expands to all city airports).
  * POST /api/v1/flights/search
@@ -69,8 +82,12 @@ router.post(
       tenant: req.tenant,
     });
     const publicResult = sanitizeFlightSearchForPublic(result);
+    req.journeyId = result.journeyId;
+    req.businessOperation = 'SEARCH';
     await logPublicSearchResult({
       requestId: req.requestId,
+      journeyId: result.journeyId,
+      businessOperation: 'SEARCH',
       dsaId: req.tenant?.dsaId,
       userId: req.user?._id,
       service: 'FLIGHT',
@@ -93,7 +110,80 @@ router.post(
   '/revalidate',
   asyncHandler(async (req, res) => {
     const dto = validateFlightFareLookup(req.body);
-    return sendSuccess(res, await revalidateFlightOffer(dto, { tenant: req.tenant }));
+    const quoted = await revalidateFlightOffer(dto, {
+      tenant: req.tenant,
+      dsaId: req.tenant?.dsaId,
+      userId: req.user?._id,
+      requestId: req.requestId,
+      clientJourneyId: req.body?.journeyId || null,
+      asReturn: req.body?.asReturn === true,
+      simulatePriceChange: req.body?.simulatePriceChange === true,
+      acceptPriceChange: req.body?.acceptPriceChange === true,
+      expired: req.body?.expired === true,
+      supplier: req.body?.supplier || null,
+    });
+    req.journeyId = quoted.journeyId;
+    req.businessOperation = 'CONFIRM_FARE';
+    return sendSuccess(res, quoted);
+  }),
+);
+
+router.post(
+  '/fare-quote',
+  asyncHandler(async (req, res) => {
+    const dto = validateFlightFareLookup(req.body);
+    const quoted = await revalidateFlightOffer(dto, {
+      tenant: req.tenant,
+      dsaId: req.tenant?.dsaId,
+      userId: req.user?._id,
+      requestId: req.requestId,
+      clientJourneyId: req.body?.journeyId || null,
+      asReturn: req.body?.asReturn === true,
+      simulatePriceChange: req.body?.simulatePriceChange === true,
+      acceptPriceChange: req.body?.acceptPriceChange === true,
+      expired: req.body?.expired === true,
+      supplier: req.body?.supplier || null,
+    });
+    req.journeyId = quoted.journeyId;
+    req.businessOperation = 'CONFIRM_FARE';
+    return sendSuccess(res, quoted);
+  }),
+);
+
+router.post(
+  '/ssr',
+  asyncHandler(async (req, res) => {
+    const dto = validateDetailsBody(req.body);
+    const inventory = await getFlightSsr(dto, {
+      tenant: req.tenant,
+      dsaId: req.tenant?.dsaId,
+      userId: req.user?._id,
+      requestId: req.requestId,
+      clientJourneyId: req.body?.journeyId || null,
+      asReturn: req.body?.asReturn === true,
+      supplier: req.body?.supplier || null,
+    });
+    req.journeyId = inventory.journeyId;
+    req.businessOperation = 'SSR';
+    return sendSuccess(res, inventory);
+  }),
+);
+
+router.post(
+  '/block',
+  requireLogin,
+  asyncHandler(async (req, res) => {
+    const blocked = await blockFlight(req.body || {}, {
+      tenant: req.tenant,
+      userId: req.user?._id,
+      requestId: req.requestId,
+      simulatePriceChange: req.body?.simulatePriceChange === true,
+      acceptPriceChange: req.body?.acceptPriceChange === true,
+      simulateBlockFailure: req.body?.simulateBlockFailure === true,
+    });
+    req.journeyId = blocked.journeyId;
+    req.businessOperation = 'BLOCK';
+    return sendSuccess(res, blocked);
   }),
 );
 

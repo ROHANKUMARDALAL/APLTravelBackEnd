@@ -39,6 +39,7 @@ function consolidateTransferOffers(clusters, pricingContext = null) {
         price: priced.customerPrice,
         supplierPrice: priced.supplierPrice,
         commercialSnapshot: priced.commercialSnapshot,
+        pickupPoints: Array.isArray(member.pickupPoints) ? member.pickupPoints : [],
       });
 
       supplierMappings.push({
@@ -63,6 +64,7 @@ function consolidateTransferOffers(clusters, pricingContext = null) {
       dropoff: cluster.canonical.dropoff,
       pickupDateTime: cluster.canonical.pickupDateTime,
       cancellationNote: cluster.canonical.cancellationNote,
+      pickupPoints: cheapest?.pickupPoints || cluster.canonical.pickupPoints || [],
       supplierMappings,
       offers,
       lowestPrice: cheapest

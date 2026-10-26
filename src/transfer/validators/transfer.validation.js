@@ -152,6 +152,13 @@ function validateTransferCheckoutBody(body) {
     pickupInstructions: body.pickupInstructions
       ? String(body.pickupInstructions).trim().slice(0, 500)
       : null,
+    pickupContact: body.pickupContact ? String(body.pickupContact).trim().slice(0, 80) : null,
+    pickupPoint: body.pickupPoint?.code
+      ? {
+          code: String(body.pickupPoint.code).trim().slice(0, 40),
+          name: String(body.pickupPoint.name || '').trim().slice(0, 120),
+        }
+      : null,
   };
 }
 

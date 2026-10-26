@@ -11,7 +11,29 @@ const {
 function isIsoDate(value) {
   if (typeof value !== 'string') return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  return !Number.isNaN(new Date(value).getTime());
+  return !Number.isNaN(new Date(`${value}T00:00:00+05:30`).getTime());
+}
+
+function todayInIndia() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+  }).format(new Date());
+}
+
+function normalizeSearchAliases(body) {
+  const data = { ...(body || {}) };
+  if (!data.departDate && data.departureDate) data.departDate = data.departureDate;
+  if (!data.tripType && data.journeyType) {
+    const journey = String(data.journeyType).toUpperCase().replace(/[\s-]/g, '_');
+    if (journey === 'ONE_WAY' || journey === 'ONEWAY') data.tripType = 'ONEWAY';
+    if (journey === 'ROUND_TRIP' || journey === 'ROUNDTRIP') data.tripType = 'ROUNDTRIP';
+  }
+  if (data.passengers && typeof data.passengers === 'object') {
+    if (data.adults == null) data.adults = data.passengers.adults;
+    if (data.children == null) data.children = data.passengers.children;
+    if (data.infants == null) data.infants = data.passengers.infants;
+  }
+  return data;
 }
 
 /**
@@ -24,7 +46,7 @@ function isIsoDate(value) {
  */
 function validateFlightSearchBody(body) {
   const details = [];
-  const data = body || {};
+  const data = normalizeSearchAliases(body);
 
   const originCityCode = normalizeIata(
     data.originCityCode || data.origin,
@@ -63,6 +85,20 @@ function validateFlightSearchBody(body) {
       details.push('returnDate must be YYYY-MM-DD when provided');
     }
   }
+  if (isIsoDate(data.departDate) && data.departDate < todayInIndia()) {
+    details.push('departDate cannot be in the past');
+  }
+  if (
+    isIsoDate(data.departDate) &&
+    isIsoDate(data.returnDate) &&
+    data.returnDate < data.departDate
+  ) {
+    details.push('returnDate cannot be before departDate');
+  }
+  const tripType = String(data.tripType || 'ONEWAY').toUpperCase();
+  if (tripType === 'ROUNDTRIP' && !isIsoDate(data.returnDate)) {
+    details.push('returnDate is required for a round trip');
+  }
 
   const adults = data.adults;
   const children = data.children ?? 0;
@@ -75,6 +111,13 @@ function validateFlightSearchBody(body) {
   }
   if (!Number.isInteger(infants) || infants < 0 || infants > adults) {
     details.push('infants must be an integer between 0 and adults');
+  }
+  if (
+    Number.isInteger(adults) &&
+    Number.isInteger(children) &&
+    adults + children > 9
+  ) {
+    details.push('adults plus children cannot exceed 9');
   }
   if (data.cabinClass !== undefined) {
     const allowed = ['ECONOMY', 'PREMIUM_ECONOMY', 'BUSINESS', 'FIRST'];
@@ -260,10 +303,27 @@ function validateCheckoutBody(body) {
     }
   }
 
+  let returnOffer = null;
+  if (body.returnOffer != null) {
+    if (typeof body.returnOffer !== 'object' || Array.isArray(body.returnOffer)) {
+      details.push('returnOffer must be an object');
+    } else {
+      try {
+        returnOffer = validateFlightFareLookup(body.returnOffer);
+      } catch (error) {
+        const nested = Array.isArray(error.details) ? error.details : [error.message];
+        nested.forEach((entry) => details.push(`returnOffer: ${typeof entry === 'string' ? entry : 'invalid'}`));
+      }
+    }
+  }
+
   if (details.length) throw AppError.validation('Invalid checkout request', details);
 
   return {
     ...base,
+    journeyId: body.journeyId ? String(body.journeyId) : null,
+    acceptPriceChange: body.acceptPriceChange === true,
+    returnOffer,
     addOns: { seats, baggage, meals },
     confirmPrice,
     selectedFareQuote,

@@ -39,6 +39,9 @@ const TravellerSchema = new mongoose.Schema(
     nationality: { type: String },
     passportNumber: { type: String },
     passportExpiry: { type: String },
+    address: { type: String },
+    age: { type: Number },
+    beneficiary: { type: mongoose.Schema.Types.Mixed },
   },
   { timestamps: { createdAt: true, updatedAt: false } },
 );
@@ -48,7 +51,7 @@ const BookingSchema = new mongoose.Schema(
     aplBookingRef: { type: String, required: true, unique: true },
     productType: {
       type: String,
-      enum: ['FLIGHT', 'HOTEL', 'BUS', 'TRANSFER'],
+      enum: ['FLIGHT', 'HOTEL', 'BUS', 'TRANSFER', 'INSURANCE'],
       required: true,
     },
     status: {
@@ -78,6 +81,7 @@ const BookingSchema = new mongoose.Schema(
     },
     /** Correlation id from the book/confirm request when available. */
     requestId: { type: String, index: true },
+    journeyId: { type: String, index: true },
     checkoutToken: { type: String, index: true },
     searchId: { type: String },
     /** Immutable commercial snapshot copied from checkout (Phase 12). Legacy bookings may omit. */
