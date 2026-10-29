@@ -26,6 +26,7 @@ function serviceFromPath(path) {
   if (path.includes('/holidays')) return 'HOLIDAY';
   if (path.includes('/enquiries')) return 'ENQUIRY';
   if (path.includes('/auth')) return 'AUTH';
+  if (path.includes('/wallet')) return 'WALLET';
   if (path.includes('/account')) return 'ACCOUNT';
   if (path.includes('/bookings')) return 'BOOKING';
   if (path.includes('/suppliers')) return 'SUPPLIER';

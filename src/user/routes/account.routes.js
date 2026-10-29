@@ -4,6 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../../common/middleware/error-handler');
 const { requireLogin } = require('../../common/middleware/require-login');
 const { sendSuccess } = require('../../common/response/envelope');
+const { AppError } = require('../../common/errors/app-error');
 const { toPublicUser } = require('../services/auth.service');
 const AccountAction = require('../models/AccountAction');
 const ServiceLog = require('../../common/database/models/ServiceLog');
@@ -12,6 +13,14 @@ const Refund = require('../../payments/models/Refund');
 const CancellationRequest = require('../../payments/models/CancellationRequest');
 const CustomerWallet = require('../../customer/models/CustomerWallet');
 const WalletTransaction = require('../../customer/models/WalletTransaction');
+const CustomerWalletTopUp = require('../../wallet/models/CustomerWalletTopUp');
+const { quoteWalletTopUp, mockTopUpAllowed } = require('../../wallet/wallet-topup-fee');
+const { bookingPaymentLabel, serviceCodesForWalletRows } = require('../../wallet/booking-payment-label');
+const {
+  createCustomerTopUp,
+  confirmCustomerTopUp,
+  reverseCustomerTopUp,
+} = require('../../wallet/customer-wallet-topup.service');
 const Search = require('../../common/database/models/Search');
 
 const router = express.Router();
@@ -123,21 +132,115 @@ router.get(
     const scope = customerScope(req);
     const wallet = await CustomerWallet.findOne(scope).lean();
     const transactions = await WalletTransaction.find(scope).sort({ createdAt: -1 }).limit(50).lean();
+    const serviceCodes = await serviceCodesForWalletRows(req.user._id, transactions);
+    const openTopUps = await CustomerWalletTopUp.find({
+      ...scope,
+      status: { $in: ['PENDING', 'FAILED'] },
+    }).sort({ createdAt: -1 }).limit(20).lean();
     return sendSuccess(res, {
       currency: wallet?.currency || req.user.currency || 'INR',
       balance: wallet ? wallet.balance : 0,
-      transactions: transactions.map((row) => ({
-        id: String(row._id),
-        amount: row.amount,
-        direction: row.direction,
-        type: row.type,
-        currency: row.currency,
-        reason: row.reason || '',
-        reference: row.reference || '',
-        balanceAfter: row.balanceAfter,
-        createdAt: row.createdAt,
-      })),
+      totalCredits: wallet ? Number(wallet.totalCredits || 0) : 0,
+      totalDebits: wallet ? Number(wallet.totalDebits || 0) : 0,
+      demoTopUp: mockTopUpAllowed(),
+      transactions: [
+        ...openTopUps.map((row) => ({
+          id: row.paymentRef,
+          amount: row.grossAmount,
+          feeAmount: row.feeAmount,
+          netAmount: row.netAmount,
+          direction: null,
+          type: 'ADD_MONEY',
+          currency: row.currency,
+          reason: 'Add Money',
+          reference: row.paymentRef,
+          method: row.method,
+          status: row.status === 'FAILED' ? 'failed' : 'pending',
+          balanceAfter: null,
+          createdAt: row.createdAt,
+        })),
+        ...transactions.map((row) => ({
+          id: String(row._id),
+          amount: row.amount,
+          feeAmount: Number(row.feeAmount || 0),
+          grossAmount: Number(row.grossAmount || 0),
+          direction: row.direction,
+          type: row.type,
+          currency: row.currency,
+          serviceCode: serviceCodes.get(String(row._id)) || '',
+          reason: row.type === 'BOOKING_DEBIT'
+            ? bookingPaymentLabel(serviceCodes.get(String(row._id)))
+            : row.type === 'BOOKING_REVERSAL'
+              ? bookingPaymentLabel(serviceCodes.get(String(row._id)), true)
+              : (row.reason || ''),
+          reference: row.reference || '',
+          method: row.method || '',
+          status: String(row.status || 'SUCCESS').toLowerCase(),
+          balanceAfter: row.balanceAfter,
+          createdAt: row.createdAt,
+        })),
+      ].sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0)).slice(0, 8),
     });
+  }),
+);
+
+router.post(
+  '/wallet/topup/quote',
+  asyncHandler(async (req, res) => {
+    let quote;
+    try {
+      quote = quoteWalletTopUp(req.body?.amount, req.body?.method);
+    } catch (error) {
+      throw AppError.validation(error.message || 'Invalid wallet top-up');
+    }
+    return sendSuccess(res, { ...quote, demoTopUp: mockTopUpAllowed() });
+  }),
+);
+
+router.post(
+  '/wallet/topup',
+  asyncHandler(async (req, res) => {
+    const scope = customerScope(req);
+    if (!scope.dsaId) throw AppError.forbidden('Your account is not registered on this website');
+    const created = await createCustomerTopUp({
+      userId: req.user._id,
+      dsaId: scope.dsaId,
+      input: req.body || {},
+      idempotencyKey: req.get('idempotency-key') || req.body?.idempotencyKey,
+      requestId: req.requestId,
+    });
+    return sendSuccess(res, created.topUp, { replay: created.replay });
+  }),
+);
+
+router.post(
+  '/wallet/topup/:paymentRef/confirm',
+  asyncHandler(async (req, res) => {
+    const scope = customerScope(req);
+    if (!scope.dsaId) throw AppError.forbidden('Your account is not registered on this website');
+    const result = await confirmCustomerTopUp({
+      userId: req.user._id,
+      dsaId: scope.dsaId,
+      paymentRef: req.params.paymentRef,
+      outcome: req.body?.demoOutcome,
+      requestId: req.requestId,
+    });
+    return sendSuccess(res, result.topUp);
+  }),
+);
+
+router.post(
+  '/wallet/topup/:paymentRef/reverse',
+  asyncHandler(async (req, res) => {
+    const scope = customerScope(req);
+    if (!scope.dsaId) throw AppError.forbidden('Your account is not registered on this website');
+    const result = await reverseCustomerTopUp({
+      userId: req.user._id,
+      dsaId: scope.dsaId,
+      paymentRef: req.params.paymentRef,
+      requestId: req.requestId,
+    });
+    return sendSuccess(res, result.topUp);
   }),
 );
 
@@ -160,11 +263,12 @@ router.get(
   '/transactions',
   asyncHandler(async (req, res) => {
     const scope = customerScope(req);
-    const [payments, refunds, walletRows, wallet] = await Promise.all([
+    const [payments, refunds, walletRows, wallet, openTopUps] = await Promise.all([
       Payment.find(scope).sort({ createdAt: -1 }).limit(200).lean(),
       Refund.find(scope).sort({ createdAt: -1 }).limit(200).lean(),
       WalletTransaction.find(scope).sort({ createdAt: -1 }).limit(200).lean(),
       CustomerWallet.findOne(scope).lean(),
+      CustomerWalletTopUp.find({ ...scope, status: { $in: ['PENDING', 'FAILED'] } }).sort({ createdAt: -1 }).limit(100).lean(),
     ]);
     const bookingIds = [
       ...payments.map((row) => row.bookingId),
@@ -174,6 +278,7 @@ router.get(
       ? await Booking.find({ _id: { $in: bookingIds }, userId: req.user._id }).select('aplBookingRef productType').lean()
       : [];
     const bookingById = new Map(bookings.map((row) => [String(row._id), row]));
+    const walletServiceCodes = await serviceCodesForWalletRows(req.user._id, walletRows);
     const paymentRefs = new Set(payments.map((row) => row.paymentRef).filter(Boolean));
     const refundRefs = new Set(refunds.map((row) => row.refundRef).filter(Boolean));
     const rows = [];
@@ -187,6 +292,7 @@ router.get(
         reference: row.paymentRef || String(row._id),
         bookingReference: booking?.aplBookingRef || null,
         service: booking?.productType || 'BOOKING',
+        serviceCode: String(booking?.productType || '').toLowerCase(),
         type: 'Booking payment',
         amount: Number(row.amount || 0),
         currency: row.currency || 'INR',
@@ -206,6 +312,7 @@ router.get(
         reference: row.refundRef || String(row._id),
         bookingReference: booking?.aplBookingRef || null,
         service: booking?.productType || 'BOOKING',
+        serviceCode: String(booking?.productType || '').toLowerCase(),
         type: 'Refund',
         amount: Number(row.approvedAmount ?? row.requestedAmount ?? 0),
         currency: row.currency || 'INR',
@@ -216,21 +323,52 @@ router.get(
       });
     }
 
+    for (const row of openTopUps) {
+      rows.push({
+        id: row.paymentRef,
+        reference: row.paymentRef,
+        bookingReference: null,
+        service: 'WALLET',
+        type: 'Add Money',
+        amount: Number(row.grossAmount || 0),
+        feeAmount: Number(row.feeAmount || 0),
+        netAmount: Number(row.netAmount || 0),
+        currency: row.currency || 'INR',
+        direction: null,
+        method: row.method || 'DEMO',
+        status: row.status === 'FAILED' ? 'failed' : 'pending',
+        createdAt: row.createdAt,
+      });
+    }
+
     for (const row of walletRows) {
       const reference = String(row.reference || '');
       if (reference && (paymentRefs.has(reference) || refundRefs.has(reference))) continue;
       const credit = row.direction === 'CREDIT';
+      const kind = row.type === 'ADD_MONEY'
+        ? 'Add Money'
+        : row.type === 'TOPUP_REVERSAL'
+          ? 'Top-up reversal'
+          : row.type === 'BOOKING_DEBIT'
+            ? 'Booking payment'
+            : row.type === 'BOOKING_REVERSAL'
+              ? 'Booking payment reversal'
+              : (row.type || (credit ? 'Wallet credit' : 'Wallet debit'));
+      const stored = String(row.status || 'SUCCESS').toUpperCase();
       rows.push({
         id: String(row._id),
         reference: reference || String(row._id),
-        bookingReference: null,
+        bookingReference: row.bookingReference || null,
         service: 'WALLET',
-        type: row.type || (credit ? 'Wallet credit' : 'Wallet debit'),
+        serviceCode: walletServiceCodes.get(String(row._id)) || '',
+        type: kind,
         amount: Number(row.amount || 0),
+        feeAmount: Number(row.feeAmount || 0),
+        grossAmount: Number(row.grossAmount || 0),
         currency: row.currency || 'INR',
         direction: row.direction,
-        method: 'Customer wallet',
-        status: 'success',
+        method: row.method || 'Customer wallet',
+        status: stored === 'REFUNDED' ? 'refunded' : 'success',
         createdAt: row.createdAt,
       });
     }
@@ -270,6 +408,14 @@ router.get(
       if (Number.isFinite(to) && at > to + 86400000) return false;
       return true;
     });
+    const labeled = filtered.map((row) => ({
+      ...row,
+      type: row.type === 'Booking payment'
+        ? bookingPaymentLabel(row.serviceCode)
+        : row.type === 'Booking payment reversal'
+          ? bookingPaymentLabel(row.serviceCode, true)
+          : row.type,
+    }));
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(20, Math.max(1, Number(req.query.limit) || 8));
     const start = (page - 1) * limit;
@@ -277,8 +423,8 @@ router.get(
       summary,
       page,
       limit,
-      total: filtered.length,
-      transactions: filtered.slice(start, start + limit),
+      total: labeled.length,
+      transactions: labeled.slice(start, start + limit),
     });
   }),
 );

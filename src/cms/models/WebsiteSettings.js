@@ -34,6 +34,14 @@ const WebsiteSettingsSchema = new mongoose.Schema(
       defaultDescription: { type: String, trim: true, default: '', maxlength: 320 },
       keywords: { type: String, trim: true, default: '', maxlength: 400 },
     },
+    publishedThemeCode: { type: String, trim: true, uppercase: true, default: '' },
+    themeColors: {
+      color1: { type: String, trim: true, uppercase: true, default: '' },
+      color2: { type: String, trim: true, uppercase: true, default: '' },
+      color3: { type: String, trim: true, uppercase: true, default: '' },
+      color4: { type: String, trim: true, uppercase: true, default: '' },
+      color5: { type: String, trim: true, uppercase: true, default: '' },
+    },
   },
   { timestamps: true },
 );

@@ -6,6 +6,7 @@
  */
 
 const { mongoose } = require('../connection');
+const { createBookingRepository } = require('../booking-store');
 
 const BookingItemSchema = new mongoose.Schema(
   {
@@ -79,6 +80,17 @@ const BookingSchema = new mongoose.Schema(
       ref: 'Dsa',
       index: true,
     },
+    /** Optional DSA snapshot copied at create time. Historical rows may omit both. */
+    dsaCode: { type: String },
+    dsaName: { type: String },
+    /** Mirrors productType. Historical rows may omit it. */
+    serviceCode: { type: String },
+    customerName: { type: String },
+    supplierCode: { type: String },
+    /** Server payment summary. Never store card numbers, CVV, or gateway secrets. */
+    paymentSummary: { type: mongoose.Schema.Types.Mixed },
+    /** Supplier facts already returned by the offer. Missing times stay empty. */
+    serviceDetails: { type: mongoose.Schema.Types.Mixed },
     /** Correlation id from the book/confirm request when available. */
     requestId: { type: String, index: true },
     journeyId: { type: String, index: true },
@@ -176,6 +188,6 @@ PaymentSchema.index({ bookingId: 1, createdAt: -1 });
 PaymentSchema.index({ checkoutToken: 1, status: 1 });
 
 module.exports = {
-  Booking: mongoose.models.Booking || mongoose.model('Booking', BookingSchema),
+  Booking: createBookingRepository({ mongoose, schema: BookingSchema }),
   Payment: mongoose.models.Payment || mongoose.model('Payment', PaymentSchema),
 };

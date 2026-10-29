@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { config } = require('../../common/config');
 const { AppError, ErrorCode } = require('../../common/errors/app-error');
+const { assertPickupLeadTime } = require('../utils/pickup-lead');
 const { formatAplSearchId } = require('../../common/utils/apl-ids');
 const { normalizeCandidate } = require('../utils/transfer-normalization');
 const { resolveTransfers } = require('../utils/transfer-entity-resolution');
@@ -309,6 +310,10 @@ async function revalidateTransferOffer(dto, context = {}) {
   if (!offer) {
     throw AppError.validation('Selected transfer offer is no longer available.');
   }
+  assertPickupLeadTime(
+    search.request?.pickupDateTime || transfer.pickupDateTime,
+    search.request?.timeZone || transfer.pickup?.timeZone,
+  );
   if (
     context.supplier
     && String(context.supplier).toUpperCase() !== String(offer.supplier || transfer.supplier || '').toUpperCase()

@@ -3,6 +3,7 @@
 const express = require('express');
 const { asyncHandler } = require('../../common/middleware/error-handler');
 const {
+  getTheme,
   getSiteConfig,
   listBlogs,
   getBlog,
@@ -17,6 +18,7 @@ const router = express.Router();
  * Tenant is resolved from Host / X-Forwarded-Host (dev: X-APL-Public-Host + host map).
  * Client-supplied dsaId is never trusted.
  */
+router.get('/site/theme', asyncHandler(getTheme));
 router.get('/site/config', asyncHandler(getSiteConfig));
 router.get('/popular-routes', asyncHandler(listPopularRoutes));
 // Backward-compatible alias used during Phase 7 stub era.

@@ -23,7 +23,11 @@ const {
   normalizePaymentStatus,
 } = require('../../payments/services/payment.service');
 const { canChangePoints } = require('../../bus/utils/point-window');
-const CustomerWallet = require('../../customer/models/CustomerWallet');
+const {
+  assertWalletCoversBooking,
+  debitCustomerWalletForBooking,
+  reverseCustomerWalletDebit,
+} = require('../../wallet/customer-wallet-payment');
 const {
   processCancellation,
   toPublicCancellation,
@@ -227,23 +231,13 @@ async function confirmBookingFromCheckout({
     ]);
   }
 
-  let walletDoc = null;
   if (charge.paymentMethod === 'WALLET') {
-    walletDoc = await CustomerWallet.findOne({
+    await assertWalletCoversBooking({
       userId: user._id,
       dsaId: session.dsaId,
       currency: charge.currency,
+      amount: charge.amount,
     });
-    const balance = Number(walletDoc?.balance || 0);
-    if (!walletDoc || balance < charge.amount) {
-      throw AppError.validation('Insufficient wallet balance', [
-        {
-          balance,
-          requiredAmount: charge.amount,
-          currency: charge.currency,
-        },
-      ]);
-    }
   }
 
   // Atomic claim — prevents double-click creating two payments.
@@ -699,12 +693,52 @@ async function confirmBookingFromCheckout({
   }
 
   let booking;
+  let walletDebit = null;
+  if (charge.paymentMethod === 'WALLET') {
+    try {
+      walletDebit = await debitCustomerWalletForBooking({
+        userId: user._id,
+        dsaId: claimed.dsaId,
+        currency: charge.currency,
+        amount: charge.amount,
+        paymentRef: paymentDoc.paymentRef,
+        bookingReference: aplBookingRef,
+        serviceCode: claimed.productType,
+      });
+    } catch (err) {
+      if (err.code === 'INSUFFICIENT_WALLET_BALANCE' && claimed.status === 'PAYING') {
+        claimed.status = 'READY';
+        await claimed.save().catch(() => {});
+      }
+      throw err;
+    }
+  }
   try {
+    const paidAmount = Number(charge.amount) || 0;
+    const method = ['WALLET', 'UPI', 'CARD', 'NET_BANKING'].includes(String(charge.paymentMethod || '').toUpperCase())
+      ? String(charge.paymentMethod).toUpperCase()
+      : 'OTHER';
     booking = await Booking.create({
       aplBookingRef,
       userId: user._id,
       customerProfileId: String(user._id),
+      customerName: user.name || '',
       dsaId: claimed.dsaId || undefined,
+      serviceCode: claimed.productType,
+      supplierCode: items[0]?.supplierCode || '',
+      paymentSummary: {
+        method,
+        provider: 'APL_MOCK_PAY',
+        paymentRef: paymentDoc.paymentRef,
+        status: 'SUCCESS',
+        paidAmount,
+        walletAmount: method === 'WALLET' ? paidAmount : 0,
+        gatewayAmount: method === 'WALLET' ? 0 : paidAmount,
+        feeAmount: Number(charge.paymentFee) || 0,
+        currency: charge.currency,
+        paidAt: clock.bookedAtUtc,
+      },
+      serviceDetails: serviceRecord,
       requestId: requestId || claimed.requestId || undefined,
       journeyId: claimed.journeyId || undefined,
       productType: claimed.productType,
@@ -743,6 +777,16 @@ async function confirmBookingFromCheckout({
       actor: { id: String(user._id), email: claimed.contact?.email || '' },
     });
   } catch (err) {
+    if (walletDebit) {
+      await reverseCustomerWalletDebit({
+        userId: user._id,
+        dsaId: claimed.dsaId,
+        currency: charge.currency,
+        amount: charge.amount,
+        paymentRef: paymentDoc.paymentRef,
+        serviceCode: claimed.productType,
+      });
+    }
     paymentDoc.bookingConfirmStatus = 'FAILED';
     paymentDoc.needsAttention = true;
     await paymentDoc.save();
@@ -785,25 +829,9 @@ async function confirmBookingFromCheckout({
   claimed.aplBookingRef = aplBookingRef;
   await claimed.save();
 
-  let balanceAfter = user.balance;
-  if (charge.paymentMethod === 'WALLET') {
-    const debited = await CustomerWallet.findOneAndUpdate(
-      {
-        userId: user._id,
-        dsaId: claimed.dsaId,
-        currency: charge.currency,
-        balance: { $gte: charge.amount },
-      },
-      { $inc: { balance: -charge.amount, totalDebits: charge.amount } },
-      { new: true },
-    );
-    if (!debited) {
-      throw AppError.validation('Insufficient wallet balance', [
-        { requiredAmount: charge.amount, currency: charge.currency },
-      ]);
-    }
-    balanceAfter = debited.balance;
-    user.balance = debited.balance;
+  let balanceAfter = walletDebit ? walletDebit.balance : user.balance;
+  if (walletDebit) {
+    user.balance = walletDebit.balance;
     await user.save();
   }
 

@@ -14,6 +14,17 @@ const {
   groupPublicPopularRoutes,
 } = require('../services/popular-routes.service');
 
+async function getTheme(req, res) {
+  const { dsa, host, source } = await resolvePublicTenant(req);
+  const theme = await require('../../cms/services/b2c-theme.service').resolvePublicTheme(dsa._id);
+  res.set('Cache-Control', 'private, no-store');
+  res.set('Vary', 'X-APL-Public-Host, X-Forwarded-Host, Host');
+  return sendSuccess(res, {
+    theme,
+    meta: { resolvedHost: host, resolutionSource: source },
+  });
+}
+
 async function getSiteConfig(req, res) {
   const { dsa, host, source } = await resolvePublicTenant(req);
   const configPayload = await buildPublicSiteConfig(dsa);
@@ -77,6 +88,7 @@ async function getPage(req, res) {
 }
 
 module.exports = {
+  getTheme,
   getSiteConfig,
   listBlogs,
   getBlog,

@@ -5,6 +5,7 @@ const {
   normalizeTransferPoint,
   deriveTransferType,
 } = require('../services/location.service');
+const { assertPickupLeadTime, resolveCabTimeZone } = require('../utils/pickup-lead');
 
 function isIsoDate(value) {
   if (typeof value !== 'string') return false;
@@ -60,6 +61,12 @@ function validateTransferSearchBody(body) {
   if (!isIsoDateTime(pickupDateTime)) {
     details.push('pickupDateTime must be YYYY-MM-DDTHH:mm (or pickupDate+pickupTime)');
   }
+  const timeZone = resolveCabTimeZone({
+    timeZone: data.timeZone || pickup?.timeZone,
+  });
+  if (!details.length) {
+    assertPickupLeadTime(String(pickupDateTime).slice(0, 16), timeZone);
+  }
 
   const passengers = Number(data.passengers ?? data.adults ?? 1);
   if (!Number.isInteger(passengers) || passengers < 1 || passengers > 8) {
@@ -77,6 +84,7 @@ function validateTransferSearchBody(body) {
     pickup,
     dropoff,
     pickupDateTime: String(pickupDateTime).slice(0, 16),
+    timeZone,
     passengers,
     currency: String(data.currency || 'INR').toUpperCase(),
     transferType: String(transferType).toUpperCase(),

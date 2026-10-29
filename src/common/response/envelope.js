@@ -14,6 +14,7 @@ const NumericErrorCode = {
   [ErrorCode.DATABASE_UNAVAILABLE]: 1007,
   [ErrorCode.UNAUTHORIZED]: 1009,
   [ErrorCode.FORBIDDEN]: 1010,
+  [ErrorCode.INSUFFICIENT_WALLET_BALANCE]: 1011,
   PAYMENT_FAILED: 1008,
 };
 

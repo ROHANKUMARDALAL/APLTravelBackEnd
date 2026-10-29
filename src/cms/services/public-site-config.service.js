@@ -161,7 +161,13 @@ async function buildPublicSiteConfig(dsa) {
       seoDescription: p.seoDescription || '',
       updatedAt: p.updatedAt,
     })),
-    banners: banners.map((b) => ({
+    banners: banners.filter((b) => {
+      const url = String(b.imageUrl || '');
+      const prefix = `/media/dsa/${String(dsaId)}/`;
+      if (url.startsWith('/media/dsa/') && !url.startsWith(prefix)) return false;
+      if (b.placement === 'HOME_HERO' && !url.startsWith(prefix)) return false;
+      return true;
+    }).map((b) => ({
       title: b.title,
       imageUrl: b.imageUrl,
       linkUrl: b.linkUrl || '',
@@ -170,6 +176,8 @@ async function buildPublicSiteConfig(dsa) {
       displayOrder: b.displayOrder,
     })),
     blogs: blogs.map(publicBlogCard),
+    theme: await require('./b2c-theme.service').resolvePublicTheme(dsaId),
+    themeColors: (await require('./theme-colors').resolveThemeColors(dsaId)).colors,
   };
 }
 

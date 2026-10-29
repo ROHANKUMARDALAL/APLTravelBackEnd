@@ -1,6 +1,8 @@
 'use strict';
 
 const { AppError } = require('../../common/errors/app-error');
+const { assertPickupLeadTime } = require('../utils/pickup-lead');
+const CheckoutSession = require('../../common/database/models/CheckoutSession');
 const { assertExactPrice } = require('../../common/utils/price-confirm');
 const {
   getTransferDetails,
@@ -24,6 +26,7 @@ async function checkoutTransfer(dto, context = {}) {
 
   const transfer = details.transfer;
   const offer = details.selectedOffer;
+  assertPickupLeadTime(transfer.pickupDateTime, transfer.pickup?.timeZone);
   if (dto.travellers.length > Number(transfer.maxPassengers || 8)) {
     throw AppError.validation(`This cab seats ${transfer.maxPassengers} passengers`);
   }
@@ -125,6 +128,15 @@ async function checkoutTransfer(dto, context = {}) {
 }
 
 async function bookTransfer(dto, user, context = {}) {
+  const session = await CheckoutSession.findOne({ checkoutToken: dto.checkoutToken })
+    .select('status productType offerSnapshot')
+    .lean();
+  if (session && session.status !== 'BOOKED' && session.productType === 'TRANSFER') {
+    assertPickupLeadTime(
+      session.offerSnapshot?.pickupDateTime,
+      session.offerSnapshot?.pickup?.timeZone,
+    );
+  }
   return confirmBookingFromCheckout({
     checkoutToken: dto.checkoutToken,
     payment: dto.payment,
