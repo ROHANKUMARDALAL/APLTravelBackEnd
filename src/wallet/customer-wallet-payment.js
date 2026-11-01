@@ -49,6 +49,7 @@ async function debitCustomerWalletForBooking({
   paymentRef,
   bookingReference = '',
   serviceCode = '',
+  reason = 'Booking payment',
 }) {
   if (!paymentRef) throw AppError.validation('Wallet payment reference is required');
   const existing = await WalletTransaction.findOne({ reference: paymentRef, type: 'BOOKING_DEBIT' }).lean();
@@ -78,7 +79,7 @@ async function debitCustomerWalletForBooking({
       paymentRef,
       bookingReference,
       serviceCode: normalizeServiceCode(serviceCode),
-      reason: 'Booking payment',
+      reason,
       balanceAfter: updated.balance,
       method: 'WALLET',
       status: 'SUCCESS',
@@ -98,7 +99,7 @@ async function debitCustomerWalletForBooking({
   return { replay: false, balance: updated.balance };
 }
 
-async function reverseCustomerWalletDebit({ userId, dsaId, currency, amount, paymentRef, serviceCode = '' }) {
+async function reverseCustomerWalletDebit({ userId, dsaId, currency, amount, paymentRef, serviceCode = '', reason = 'Booking payment reversal' }) {
   const reference = `${paymentRef}:reversal`;
   const existing = await WalletTransaction.findOne({ reference, type: 'BOOKING_REVERSAL' }).lean();
   if (existing) return { replay: true };
@@ -120,7 +121,7 @@ async function reverseCustomerWalletDebit({ userId, dsaId, currency, amount, pay
       paymentRef,
       bookingReference: debit?.bookingReference || '',
       serviceCode: normalizeServiceCode(serviceCode || debit?.serviceCode),
-      reason: 'Booking payment reversal',
+      reason,
       balanceAfter: updated.balance,
       method: 'WALLET',
       status: 'REFUNDED',

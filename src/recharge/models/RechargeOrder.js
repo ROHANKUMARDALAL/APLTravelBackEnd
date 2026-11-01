@@ -16,7 +16,7 @@ const RechargeOrderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['VALIDATED', 'SUCCESS', 'FAILED', 'PENDING'],
+      enum: ['VALIDATED', 'SUCCESS', 'FAILED', 'PENDING', 'REFUNDED'],
       required: true,
       index: true,
     },

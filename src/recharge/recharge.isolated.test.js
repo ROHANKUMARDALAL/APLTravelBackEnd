@@ -42,15 +42,15 @@ describe('recharge mock lifecycle', () => {
   it('lists countries and India operators without inventing foreign Indian brands', () => {
     const meta = catalogue();
     assert.ok(meta.countries.length > 200);
-    assert.deepEqual(meta.mobileOperators.IN.map((row) => row.name), ['Jio', 'Airtel', 'Vi', 'BSNL']);
+    assert.deepEqual(meta.mobileOperators.IN.map((row) => row.name), ['Reliance Jio', 'Bharti Airtel', 'Vodafone Idea (Vi)', 'BSNL', 'MTNL']);
     assert.equal(meta.mobileOperators.FR, undefined);
     assert.ok(meta.electricity.some((row) => row.name === 'Paschimanchal Vidyut Vitran Nigam Limited'));
     assert.ok(meta.metros.some((row) => row.name === 'Delhi Metro'));
   });
 
   it('returns prepaid plans and a labelled postpaid test bill', () => {
-    const plans = plansFor('IN', 'JIO', 'PREPAID');
-    assert.equal(plans.plans[0].id, 'JIO-239');
+    const plans = plansFor('IN', 'JIO', 'PREPAID', 'DELHI');
+    assert.equal(plans.plans[0].id, 'JIO-199');
     assert.equal(plans.test, true);
     const bill = billFor({ category: 'MOBILE', country: 'IN', operator: 'AIRTEL', lineType: 'POSTPAID', mobile: '9876543210' });
     assert.match(bill.notice, /MOCK \/ TEST/);
@@ -86,6 +86,7 @@ describe('recharge mock lifecycle', () => {
       lineType: 'PREPAID',
       mobile: '9876543210',
       planId: 'JIO-239',
+      circle: 'DELHI',
       idempotencyKey: 'jio-key-001',
     }, context);
     const paid = await payRecharge({ idempotencyKey: 'jio-key-001', amount: locked.amount, cardLast4: '4242' }, context);

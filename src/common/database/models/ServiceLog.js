@@ -12,6 +12,8 @@ const LIFECYCLE_STAGES = [
   'ERROR',
   // Phase 13 — payment / booking confirm / cancellation / refund
   'PAYMENT_CREATED',
+  'FEE_RESPONSE',
+  'FEE_RECALCULATED',
   'PAYMENT_SUCCESS',
   'PAYMENT_FAILED',
   'BOOKING_CONFIRM_ATTEMPT',

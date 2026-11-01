@@ -13,6 +13,8 @@ const {
   SUPPORTED_ROUTE_SERVICES,
   groupPublicPopularRoutes,
 } = require('../services/popular-routes.service');
+const { listOfferedServicesForDsa } = require('../../tenant/services/service-offer.service');
+const { listPublicCoupons } = require('../../pricing/services/coupon.service');
 
 async function getTheme(req, res) {
   const { dsa, host, source } = await resolvePublicTenant(req);
@@ -80,6 +82,15 @@ async function listPopularRoutes(req, res) {
   return sendSuccess(res, { groups, routes });
 }
 
+async function listOffers(req, res) {
+  const { dsa } = await resolvePublicTenant(req);
+  const services = await listOfferedServicesForDsa(dsa._id);
+  const offers = await listPublicCoupons(dsa._id, services.map((service) => service.code));
+  res.set('Cache-Control', 'private, no-store');
+  res.set('Vary', 'X-APL-Public-Host, X-Forwarded-Host, Host');
+  return sendSuccess(res, { offers });
+}
+
 async function getPage(req, res) {
   const { dsa } = await resolvePublicTenant(req);
   const page = await getPublicPageBySlug(dsa._id, req.params.slug);
@@ -94,4 +105,5 @@ module.exports = {
   getBlog,
   getPage,
   listPopularRoutes,
+  listOffers,
 };

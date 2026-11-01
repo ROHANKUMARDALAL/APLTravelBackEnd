@@ -32,6 +32,54 @@ function customerKeyOf(customerId) {
   return customerId ? String(customerId) : 'guest';
 }
 
+/** Same active window used before a coupon can be priced. */
+function catalogWindow(coupon, at = new Date()) {
+  if (!coupon || coupon.status === 'INACTIVE') return 'INVALID';
+  if (
+    coupon.status === 'EXPIRED'
+    || (coupon.endsAt && new Date(coupon.endsAt) < at)
+    || (coupon.startsAt && new Date(coupon.startsAt) > at)
+  ) {
+    return 'EXPIRED';
+  }
+  if (coupon.totalLimit != null && coupon.usedCount >= coupon.totalLimit) return 'LIMIT';
+  return 'OPEN';
+}
+
+function publicCouponCard(coupon) {
+  return {
+    code: coupon.code,
+    name: coupon.name,
+    description: coupon.description || '',
+    serviceCode: coupon.serviceCode,
+    adjustmentType: coupon.adjustmentType,
+    value: coupon.value,
+    currency: coupon.currency || 'INR',
+    maxAmount: coupon.maxAmount ?? null,
+    minAmount: coupon.minAmount || 0,
+    endsAt: coupon.endsAt || null,
+    firstBookingOnly: Boolean(coupon.firstBookingOnly),
+    exclusive: Boolean(coupon.exclusive),
+    routeLimited: Boolean(coupon.originCode || coupon.destinationCode),
+  };
+}
+
+async function listPublicCoupons(dsaId, offeredCodes, at = new Date()) {
+  if (!mongoose.isValidObjectId(String(dsaId || ''))) return [];
+  const allowed = new Set((offeredCodes || []).map((code) => String(code || '').toLowerCase()));
+  if (!allowed.size) return [];
+  const rows = await Coupon.find({ dsaId, archivedAt: null, status: 'ACTIVE' })
+    .sort({ endsAt: 1, updatedAt: -1 })
+    .limit(24)
+    .lean();
+  return rows
+    .filter((row) => allowed.has(String(row.serviceCode || '').toLowerCase()))
+    .filter((row) => catalogWindow(row, at) === 'OPEN')
+    .filter((row) => !Array.isArray(row.customerIds) || row.customerIds.length === 0)
+    .slice(0, 8)
+    .map(publicCouponCard);
+}
+
 function engineInput(coupon) {
   return {
     code: coupon.code,
@@ -76,16 +124,13 @@ async function findCoupon(dsaId, serviceCode, code) {
 }
 
 async function assertEligible(coupon, { serviceCode, customerId, at = new Date() }) {
-  if (!coupon || coupon.status === 'INACTIVE') throw AppError.validation(MESSAGES.INVALID);
+  const windowState = catalogWindow(coupon, at);
+  if (windowState === 'INVALID') throw AppError.validation(MESSAGES.INVALID);
   if (String(coupon.serviceCode) !== String(serviceCode || '').toLowerCase()) {
     throw AppError.validation(MESSAGES.SERVICE);
   }
-  if (coupon.status === 'EXPIRED' || (coupon.endsAt && new Date(coupon.endsAt) < at) || (coupon.startsAt && new Date(coupon.startsAt) > at)) {
-    throw AppError.validation(MESSAGES.EXPIRED);
-  }
-  if (coupon.totalLimit != null && coupon.usedCount >= coupon.totalLimit) {
-    throw AppError.validation(MESSAGES.LIMIT);
-  }
+  if (windowState === 'EXPIRED') throw AppError.validation(MESSAGES.EXPIRED);
+  if (windowState === 'LIMIT') throw AppError.validation(MESSAGES.LIMIT);
   if (Array.isArray(coupon.customerIds) && coupon.customerIds.length && !coupon.customerIds.includes(String(customerId || ''))) {
     throw AppError.validation(MESSAGES.CUSTOMER);
   }
@@ -354,6 +399,9 @@ async function quoteStoredCoupon({ dsaId, serviceCode, code, customerId, searchI
 
 module.exports = {
   MESSAGES,
+  catalogWindow,
+  publicCouponCard,
+  listPublicCoupons,
   engineInput,
   publicBreakdown,
   priceWithCoupon,

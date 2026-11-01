@@ -7,50 +7,31 @@
 
 const MOBILE_OPERATORS = {
   IN: [
-    { code: 'JIO', name: 'Jio' },
-    { code: 'AIRTEL', name: 'Airtel' },
-    { code: 'VI', name: 'Vi' },
-    { code: 'BSNL', name: 'BSNL' },
+    { code: 'JIO', name: 'Reliance Jio', mark: 'J', lineTypes: ['PREPAID', 'POSTPAID'] },
+    { code: 'AIRTEL', name: 'Bharti Airtel', mark: 'A', lineTypes: ['PREPAID', 'POSTPAID'] },
+    { code: 'VI', name: 'Vodafone Idea (Vi)', mark: 'Vi', lineTypes: ['PREPAID', 'POSTPAID'] },
+    { code: 'BSNL', name: 'BSNL', mark: 'B', lineTypes: ['PREPAID', 'POSTPAID'] },
+    { code: 'MTNL', name: 'MTNL', mark: 'M', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Demonstration label for Delhi and Mumbai. No live MTNL connection.' },
   ],
   US: [
-    { code: 'VERIZON', name: 'Verizon' },
-    { code: 'ATT', name: 'AT&T' },
-    { code: 'TMOBILE', name: 'T-Mobile' },
+    { code: 'VERIZON', name: 'Verizon', mark: 'V', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
+    { code: 'ATT', name: 'AT&T', mark: 'At', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
+    { code: 'TMOBILE', name: 'T-Mobile', mark: 'T', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
   ],
   GB: [
-    { code: 'EE', name: 'EE' },
-    { code: 'O2', name: 'O2' },
-    { code: 'VODAFONE_UK', name: 'Vodafone' },
-    { code: 'THREE_UK', name: 'Three' },
+    { code: 'EE', name: 'EE', mark: 'EE', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
+    { code: 'O2', name: 'O2', mark: 'O2', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
+    { code: 'VODAFONE_UK', name: 'Vodafone', mark: 'Vf', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
+    { code: 'THREE_UK', name: 'Three', mark: '3', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
   ],
   AE: [
-    { code: 'ETISALAT', name: 'Etisalat' },
-    { code: 'DU', name: 'du' },
+    { code: 'ETISALAT', name: 'Etisalat', mark: 'E', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
+    { code: 'DU', name: 'du', mark: 'du', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
   ],
   SG: [
-    { code: 'SINGTEL', name: 'Singtel' },
-    { code: 'STARHUB', name: 'StarHub' },
-    { code: 'M1', name: 'M1' },
-  ],
-};
-
-const PREPAID_PLANS = {
-  JIO: [
-    { id: 'JIO-239', amount: 239, validity: '28 days', data: '1.5 GB/day', calls: 'Unlimited', benefits: 'Mock data pack' },
-    { id: 'JIO-666', amount: 666, validity: '84 days', data: '1.5 GB/day', calls: 'Unlimited', benefits: 'Mock long-validity pack' },
-    { id: 'JIO-2999', amount: 2999, validity: '365 days', data: '2.5 GB/day', calls: 'Unlimited', benefits: 'Mock annual pack' },
-  ],
-  AIRTEL: [
-    { id: 'AIRTEL-299', amount: 299, validity: '28 days', data: '1.5 GB/day', calls: 'Unlimited', benefits: 'Mock data pack' },
-    { id: 'AIRTEL-859', amount: 859, validity: '84 days', data: '1.5 GB/day', calls: 'Unlimited', benefits: 'Mock long-validity pack' },
-  ],
-  VI: [
-    { id: 'VI-299', amount: 299, validity: '28 days', data: '1.5 GB/day', calls: 'Unlimited', benefits: 'Mock data pack' },
-    { id: 'VI-719', amount: 719, validity: '56 days', data: '1.5 GB/day', calls: 'Unlimited', benefits: 'Mock data pack' },
-  ],
-  BSNL: [
-    { id: 'BSNL-199', amount: 199, validity: '28 days', data: '2 GB/day', calls: 'Unlimited', benefits: 'Mock data pack' },
-    { id: 'BSNL-397', amount: 397, validity: '30 days', data: '2 GB/day', calls: 'Unlimited', benefits: 'Mock data pack' },
+    { code: 'SINGTEL', name: 'Singtel', mark: 'S', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
+    { code: 'STARHUB', name: 'StarHub', mark: 'Sh', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
+    { code: 'M1', name: 'M1', mark: 'M1', lineTypes: ['PREPAID', 'POSTPAID'], note: 'Catalogue label only. No live recharge connection.' },
   ],
 };
 
@@ -130,7 +111,6 @@ function billingWindow(now = new Date()) {
 
 module.exports = {
   MOBILE_OPERATORS,
-  PREPAID_PLANS,
   BROADBAND,
   ELECTRICITY,
   GAS,

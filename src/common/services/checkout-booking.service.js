@@ -1130,6 +1130,9 @@ function bookingCard(booking, payment, searchRequest) {
     searchQuery.destination = saved.destination || snap.destination || searchRequest?.destination || '';
     searchQuery.depart = String(saved.departureDate || snap.departureDate || searchRequest?.departureDate || '').slice(0, 10);
     searchQuery.date = searchQuery.depart;
+  } else if (booking.productType === 'RECHARGE') {
+    const saved = booking.serviceDetails || booking.services?.recharge || {};
+    title = [saved.operator, saved.accountMasked].filter(Boolean).join(' · ') || 'Recharge';
   }
   const status = String(booking.status || '').toUpperCase();
   const today = new Intl.DateTimeFormat('en-CA', {
@@ -1167,6 +1170,16 @@ function bookingCard(booking, payment, searchRequest) {
     totalAmount: booking.totalAmount,
     currency: booking.currency,
     title: title || booking.aplBookingRef,
+    paymentMethod: payment?.method || booking.paymentSummary?.method || '',
+    paymentReference: payment?.paymentRef || booking.paymentSummary?.paymentRef || '',
+    recharge: booking.productType === 'RECHARGE'
+      ? {
+        ...(booking.serviceDetails || booking.services?.recharge || {}),
+        paymentMethod: payment?.method || booking.paymentSummary?.method || '',
+        paymentReference: payment?.paymentRef || booking.paymentSummary?.paymentRef || '',
+        fulfillment: (booking.serviceDetails || {}).fulfillment || 'DEMO / MOCK RECHARGE',
+      }
+      : undefined,
     searchQuery,
     travellers: (booking.travellers || []).map((traveller) => ({
       type: traveller.type,

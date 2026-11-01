@@ -9,6 +9,7 @@ const SERVICE_LABELS = {
   transfer: 'Cab',
   cab: 'Cab',
   insurance: 'Insurance',
+  recharge: 'Recharge',
 };
 
 function normalizeServiceCode(value) {

@@ -169,9 +169,13 @@ router.get(
           currency: row.currency,
           serviceCode: serviceCodes.get(String(row._id)) || '',
           reason: row.type === 'BOOKING_DEBIT'
-            ? bookingPaymentLabel(serviceCodes.get(String(row._id)))
+            ? (String(row.serviceCode || serviceCodes.get(String(row._id)) || '').toLowerCase() === 'recharge' && /^Recharge Payment/.test(row.reason)
+              ? row.reason
+              : bookingPaymentLabel(serviceCodes.get(String(row._id))))
             : row.type === 'BOOKING_REVERSAL'
-              ? bookingPaymentLabel(serviceCodes.get(String(row._id)), true)
+              ? (String(row.serviceCode || serviceCodes.get(String(row._id)) || '').toLowerCase() === 'recharge' && /^Recharge payment reversal/.test(row.reason)
+                ? row.reason
+                : bookingPaymentLabel(serviceCodes.get(String(row._id)), true))
               : (row.reason || ''),
           reference: row.reference || '',
           method: row.method || '',
@@ -275,7 +279,7 @@ router.get(
       ...refunds.map((row) => row.bookingId),
     ].filter(Boolean);
     const bookings = bookingIds.length
-      ? await Booking.find({ _id: { $in: bookingIds }, userId: req.user._id }).select('aplBookingRef productType').lean()
+      ? await Booking.find({ _id: { $in: bookingIds }, userId: req.user._id }).select('aplBookingRef productType serviceDetails').lean()
       : [];
     const bookingById = new Map(bookings.map((row) => [String(row._id), row]));
     const walletServiceCodes = await serviceCodesForWalletRows(req.user._id, walletRows);
@@ -294,6 +298,8 @@ router.get(
         service: booking?.productType || 'BOOKING',
         serviceCode: String(booking?.productType || '').toLowerCase(),
         type: 'Booking payment',
+        label: booking?.serviceDetails?.transactionLabel || '',
+        rechargeReference: booking?.serviceDetails?.rechargeReference || null,
         amount: Number(row.amount || 0),
         currency: row.currency || 'INR',
         direction: settled ? 'DEBIT' : null,
@@ -410,11 +416,13 @@ router.get(
     });
     const labeled = filtered.map((row) => ({
       ...row,
-      type: row.type === 'Booking payment'
-        ? bookingPaymentLabel(row.serviceCode)
-        : row.type === 'Booking payment reversal'
-          ? bookingPaymentLabel(row.serviceCode, true)
-          : row.type,
+      type: row.label
+        ? row.label
+        : row.type === 'Booking payment'
+          ? (/^Recharge Payment/.test(row.reason) ? row.reason : bookingPaymentLabel(row.serviceCode))
+          : row.type === 'Booking payment reversal'
+            ? (/^Recharge payment reversal/.test(row.reason) ? row.reason : bookingPaymentLabel(row.serviceCode, true))
+            : row.type,
     }));
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(20, Math.max(1, Number(req.query.limit) || 8));

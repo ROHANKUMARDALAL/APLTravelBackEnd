@@ -15,6 +15,7 @@ const {
   billFor,
   validateRecharge,
   payRecharge,
+  refundRecharge,
   listRecharges,
 } = require('../services/recharge.service');
 
@@ -43,7 +44,7 @@ router.post(
   '/plans',
   asyncHandler(async (req, res) => {
     req.businessOperation = 'PLANS';
-    return sendSuccess(res, plansFor(req.body?.country, req.body?.operator, req.body?.lineType));
+    return sendSuccess(res, plansFor(req.body?.country, req.body?.operator, req.body?.lineType, req.body?.circle));
   }),
 );
 
@@ -80,6 +81,21 @@ router.post(
       userId: req.user?._id,
     });
     req.businessOperation = 'RECHARGE';
+    req.journeyId = result.journeyId;
+    return sendSuccess(res, result);
+  }),
+);
+
+router.post(
+  '/:reference/refund',
+  requireLogin,
+  asyncHandler(async (req, res) => {
+    const result = await refundRecharge(req.params.reference, {
+      requestId: req.requestId,
+      dsaId: req.tenant?.dsaId,
+      userId: req.user?._id,
+    });
+    req.businessOperation = 'REFUND';
     req.journeyId = result.journeyId;
     return sendSuccess(res, result);
   }),

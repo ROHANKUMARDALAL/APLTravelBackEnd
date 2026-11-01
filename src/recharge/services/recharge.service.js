@@ -5,9 +5,11 @@ const { getCountries, getCountryCallingCode, isValidPhoneNumber } = require('lib
 const { AppError } = require('../../common/errors/app-error');
 const { writeLifecycleLog } = require('../../common/services/lifecycle-log.service');
 const RechargeOrder = require('../models/RechargeOrder');
+const { projectRechargePayment, refundRechargeOrder } = require('./recharge-ledger');
+const { listDemoPlans, findDemoPlan } = require('../demo-plans');
+const { CIRCLES, circlesFor, findCircle } = require('../demo-circles');
 const {
   MOBILE_OPERATORS,
-  PREPAID_PLANS,
   BROADBAND,
   ELECTRICITY,
   GAS,
@@ -59,6 +61,7 @@ function catalogue() {
     electricity: ELECTRICITY,
     gas: GAS,
     metros: METROS,
+    circles: CIRCLES,
   };
 }
 
@@ -68,9 +71,12 @@ function assertCategory(category) {
   return code;
 }
 
-function operatorsFor(country) {
+function operatorsFor(country, lineType) {
   const iso = String(country || '').trim().toUpperCase();
-  return MOBILE_OPERATORS[iso] || [];
+  const type = String(lineType || '').trim().toUpperCase();
+  const rows = MOBILE_OPERATORS[iso] || [];
+  if (!type) return rows;
+  return rows.filter((row) => !row.lineTypes || row.lineTypes.includes(type));
 }
 
 function findOperator(country, code) {
@@ -89,20 +95,33 @@ function assertPhone(country, mobile) {
   return number;
 }
 
-function plansFor(country, operatorCode, lineType) {
+function plansFor(country, operatorCode, lineType, circle) {
   const operator = findOperator(country, operatorCode);
-  if (String(lineType || '').toUpperCase() !== 'PREPAID') {
-    throw AppError.validation('Plans are available for prepaid lines');
+  const type = String(lineType || '').toUpperCase();
+  if (operator.lineTypes && !operator.lineTypes.includes(type)) {
+    throw AppError.validation('This operator is not available for the selected recharge type');
   }
-  const plans = (PREPAID_PLANS[operator.code] || [
-    { id: `${operator.code}-DEMO-10`, amount: 10, validity: '7 days', data: 'Demo data', calls: 'Demo calls', benefits: 'Demonstration plan' },
-  ]).map((plan) => ({ ...plan, currency: country === 'IN' ? 'INR' : 'INR', test: true }));
+  const region = resolveCircle(country, operator.code, circle);
+  const plans = listDemoPlans({ country, operatorCode: operator.code, lineType: type, circle: region?.code });
   return {
     test: true,
-    notice: TEST_NOTICE,
+    live: false,
+    notice: plans[0]?.notice || TEST_NOTICE,
     operator,
+    circle: region,
     plans,
   };
+}
+
+function resolveCircle(country, operatorCode, circle) {
+  const configured = circlesFor(country, operatorCode);
+  if (!configured.length) {
+    if (circle) throw AppError.validation('No demonstration circle is configured for this operator');
+    return null;
+  }
+  const region = findCircle(country, operatorCode, circle);
+  if (!region) throw AppError.validation('Choose a region or circle available for this operator');
+  return region;
 }
 
 function billFor(input) {
@@ -207,20 +226,37 @@ function billFor(input) {
 
 function quoteInput(input) {
   const category = assertCategory(input.category);
-  if (category === 'MOBILE' && String(input.lineType || '').toUpperCase() === 'PREPAID') {
+  if (category === 'MOBILE') {
+    const lineType = String(input.lineType || '').toUpperCase();
     assertPhone(input.country, input.mobile);
     const operator = findOperator(input.country, input.operator);
-    const plans = plansFor(input.country, operator.code, 'PREPAID').plans;
-    const plan = plans.find((row) => row.id === input.planId);
+    const region = resolveCircle(input.country, operator.code, input.circle);
+    const plan = findDemoPlan({
+      country: input.country,
+      operatorCode: operator.code,
+      lineType,
+      planId: input.planId,
+      circle: region?.code,
+    });
     if (!plan) throw AppError.validation('Choose a recharge plan');
+    if (input.amount != null && input.amount !== '' && Number(input.amount) !== plan.amount) {
+      throw AppError.validation('The selected plan amount does not match');
+    }
     return {
       category,
       amount: plan.amount,
-      currency: 'INR',
+      currency: plan.currency,
       providerCode: operator.code,
       providerName: operator.name,
       accountMasked: maskAccount(input.mobile),
-      summary: { lineType: 'Prepaid', plan, country: String(input.country).toUpperCase(), test: true, notice: TEST_NOTICE },
+      summary: {
+        lineType: lineType === 'POSTPAID' ? 'Postpaid' : 'Prepaid',
+        plan,
+        country: String(input.country).toUpperCase(),
+        circle: region,
+        test: true,
+        notice: plan.notice,
+      },
     };
   }
   if (category === 'METRO') {
@@ -327,9 +363,9 @@ async function validateRecharge(input, context) {
 
 async function payRecharge(input, context) {
   const key = String(input.idempotencyKey || '').trim();
-  const order = await RechargeOrder.findOne({ dsaId: context.dsaId, idempotencyKey: key });
+  let order = await RechargeOrder.findOne({ dsaId: context.dsaId, idempotencyKey: key });
   if (!order) throw AppError.validation('Validate the amount before payment');
-  if (order.status === 'SUCCESS' || order.status === 'FAILED' || order.status === 'PENDING') {
+  if (order.status === 'SUCCESS' || order.status === 'FAILED' || order.status === 'REFUNDED') {
     return present(order.toObject());
   }
   if (order.expiresAt && order.expiresAt.getTime() < Date.now()) {
@@ -365,7 +401,7 @@ async function payRecharge(input, context) {
     throw AppError.validation('Enter the last four digits of the mock card');
   }
   const declined = last4 === '0002';
-  if (quoted.method === 'WALLET') {
+  if (order.status === 'VALIDATED' && quoted.method === 'WALLET') {
     const CustomerWallet = require('../../customer/models/CustomerWallet');
     const wallet = await CustomerWallet.findOne({
       userId: context.userId,
@@ -380,6 +416,45 @@ async function payRecharge(input, context) {
       }]);
     }
   }
+  if (order.status === 'VALIDATED') {
+    const claimed = await RechargeOrder.findOneAndUpdate(
+      { _id: order._id, status: 'VALIDATED' },
+      { $set: { status: 'PENDING' } },
+      { new: true },
+    );
+    if (!claimed) {
+      const fresh = await RechargeOrder.findById(order._id);
+      if (!fresh) throw AppError.validation('Validate the amount before payment');
+      if (fresh.status === 'SUCCESS' || fresh.status === 'FAILED' || fresh.status === 'REFUNDED') {
+        return present(fresh.toObject());
+      }
+      order = fresh;
+    } else {
+      order = claimed;
+    }
+  }
+  const token = crypto.randomBytes(8).toString('hex');
+  const locked = await RechargeOrder.findOneAndUpdate(
+    {
+      _id: order._id,
+      status: 'PENDING',
+      $or: [{ 'summary.lock': { $exists: false } }, { 'summary.lock': null }, { 'summary.lock': '' }],
+    },
+    { $set: { 'summary.lock': token } },
+    { new: true },
+  );
+  if (!locked) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const fresh = await RechargeOrder.findById(order._id);
+      if (fresh && (fresh.status === 'SUCCESS' || fresh.status === 'FAILED' || fresh.status === 'REFUNDED')) {
+        return present(fresh.toObject());
+      }
+    }
+    throw AppError.validation('This recharge payment is already processing');
+  }
+  order = locked;
+  context.journeyId = order.journeyId;
   await record(context, 'PAYMENT', 'FEE_RESPONSE', {
     method: quoted.method,
     baseAmount: quoted.baseAmount,
@@ -397,53 +472,39 @@ async function payRecharge(input, context) {
     last4: last4 || undefined,
   });
   await record(context, 'PAYMENT', 'SUPPLIER_RESPONSE', { approved: !declined, test: true }, declined ? 'FAILED' : 'SUCCESS');
-  if (declined) {
-    order.status = 'FAILED';
-    order.summary = { ...order.summary, payment: { status: 'DECLINED', last4, test: true } };
-    await order.save();
-    await record(context, 'RECHARGE', 'OUTBOUND_RESPONSE', { reference: order.reference, status: 'FAILED' }, 'FAILED');
-    return present(order.toObject());
-  }
-  await record(context, 'RECHARGE', 'SUPPLIER_REQUEST', {
-    adapter: 'mock',
-    provider: order.providerName,
-    amount: order.amount,
-    account: order.accountMasked,
-    test: true,
-  });
-  await record(context, 'RECHARGE', 'SUPPLIER_RESPONSE', { accepted: true, test: true, notice: TEST_NOTICE });
-  if (quoted.method === 'WALLET') {
-    const CustomerWallet = require('../../customer/models/CustomerWallet');
-    const debited = await CustomerWallet.findOneAndUpdate(
-      {
-        userId: context.userId,
-        dsaId: context.dsaId,
-        currency: order.currency,
-        balance: { $gte: quoted.totalAmount },
-      },
-      { $inc: { balance: -quoted.totalAmount, totalDebits: quoted.totalAmount } },
-      { new: true },
-    );
-    if (!debited) throw AppError.validation('Insufficient wallet balance');
-  }
-  order.status = 'SUCCESS';
-  order.summary = {
-    ...order.summary,
-    payment: {
-      status: 'APPROVED',
-      last4: last4 || undefined,
-      method: quoted.method,
-      provider: 'APL_MOCK_PAY',
-      simulated: true,
-      feeAmount: quoted.feeAmount,
-      totalAmount: quoted.totalAmount,
+  const localDemoPlan = order.summary?.plan?.demo === true;
+  if (!declined && !localDemoPlan) {
+    await record(context, 'RECHARGE', 'SUPPLIER_REQUEST', {
+      adapter: 'mock',
+      provider: order.providerName,
+      amount: order.amount,
+      account: order.accountMasked,
       test: true,
-    },
-    receipt: { reference: order.reference, executedAt: new Date().toISOString(), test: true },
-  };
-  await order.save();
-  await record(context, 'RECHARGE', 'OUTBOUND_RESPONSE', { reference: order.reference, status: 'SUCCESS', test: true });
-  return present(order.toObject());
+    });
+    await record(context, 'RECHARGE', 'SUPPLIER_RESPONSE', { accepted: true, test: true, notice: TEST_NOTICE });
+  }
+  try {
+    const saved = await projectRechargePayment({
+      order,
+      context,
+      quoted: { ...quoted, last4: last4 || undefined },
+      outcome: declined ? 'FAILED' : 'SUCCESS',
+    });
+    await record(
+      context,
+      'RECHARGE',
+      'OUTBOUND_RESPONSE',
+      { reference: saved.reference, status: saved.status, bookingReference: saved.summary?.bookingReference, test: true },
+      declined ? 'FAILED' : 'SUCCESS',
+    );
+    return present(saved.toObject());
+  } catch (error) {
+    await RechargeOrder.updateOne(
+      { _id: order._id, status: 'PENDING', 'summary.lock': token },
+      { $unset: { 'summary.lock': '' } },
+    );
+    throw error;
+  }
 }
 
 async function listRecharges(context) {
@@ -456,9 +517,14 @@ async function listRecharges(context) {
 }
 
 function present(order) {
+  const summary = { ...(order.summary || {}) };
+  delete summary.lock;
   return {
     reference: order.reference,
     journeyId: order.journeyId,
+    dsaId: order.dsaId ? String(order.dsaId) : null,
+    dsaCode: summary.dsaCode || '',
+    dsaName: summary.dsaName || '',
     category: order.category,
     status: order.status,
     amount: order.amount,
@@ -466,11 +532,26 @@ function present(order) {
     providerCode: order.providerCode,
     providerName: order.providerName,
     accountMasked: order.accountMasked,
-    summary: order.summary || {},
+    bookingReference: summary.bookingReference || null,
+    paymentReference: summary.payment?.paymentRef || summary.receipt?.paymentReference || null,
+    summary,
     test: true,
+    fulfillment: summary.receipt?.fulfillment || 'DEMO / MOCK RECHARGE',
     notice: TEST_NOTICE,
     createdAt: order.createdAt,
   };
+}
+
+async function refundRecharge(reference, context) {
+  if (!context.userId) throw AppError.unauthorized();
+  const order = await RechargeOrder.findOne({
+    reference: String(reference || ''),
+    dsaId: context.dsaId,
+    userId: context.userId,
+  });
+  if (!order) throw AppError.validation('Recharge order not found');
+  const saved = await refundRechargeOrder(order, context);
+  return present(saved.toObject());
 }
 
 module.exports = {
@@ -480,6 +561,7 @@ module.exports = {
   billFor,
   validateRecharge,
   payRecharge,
+  refundRecharge,
   listRecharges,
   TEST_NOTICE,
 };

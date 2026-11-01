@@ -9,6 +9,7 @@ const {
   getBlog,
   getPage,
   listPopularRoutes,
+  listOffers,
 } = require('../controllers/site.controller');
 
 const router = express.Router();
@@ -21,6 +22,7 @@ const router = express.Router();
 router.get('/site/theme', asyncHandler(getTheme));
 router.get('/site/config', asyncHandler(getSiteConfig));
 router.get('/popular-routes', asyncHandler(listPopularRoutes));
+router.get('/offers', asyncHandler(listOffers));
 // Backward-compatible alias used during Phase 7 stub era.
 router.get('/site', asyncHandler(getSiteConfig));
 

@@ -52,7 +52,7 @@ const BookingSchema = new mongoose.Schema(
     aplBookingRef: { type: String, required: true, unique: true },
     productType: {
       type: String,
-      enum: ['FLIGHT', 'HOTEL', 'BUS', 'TRANSFER', 'INSURANCE'],
+      enum: ['FLIGHT', 'HOTEL', 'BUS', 'TRANSFER', 'INSURANCE', 'RECHARGE'],
       required: true,
     },
     status: {
