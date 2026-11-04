@@ -26,6 +26,7 @@ const Search = require('../../common/database/models/Search');
 const router = express.Router();
 
 router.use(requireLogin);
+router.use(require('../../support/customer.routes'));
 
 function customerScope(req) {
   const scope = { userId: req.user._id };

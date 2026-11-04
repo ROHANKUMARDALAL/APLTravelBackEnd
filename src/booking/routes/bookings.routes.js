@@ -122,7 +122,13 @@ router.get(
   '/',
   requireLogin,
   asyncHandler(async (req, res) => {
-    return sendSuccess(res, await listBookingsForCustomer(req.user, { tenant: req.tenant }));
+    return sendSuccess(res, await listBookingsForCustomer(req.user, {
+      tenant: req.tenant,
+      q: req.query?.q,
+      service: req.query?.service,
+      page: req.query?.page,
+      pageSize: req.query?.pageSize,
+    }));
   }),
 );
 

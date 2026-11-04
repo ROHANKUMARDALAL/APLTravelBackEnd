@@ -76,11 +76,26 @@ function loadConfig() {
     mockSupplierFailures,
     /** e.g. example.com → tenant resolves as {subdomain}.example.com */
     publicTenantBaseDomain,
+    allowedPlatformDomains: String(process.env.ALLOWED_PLATFORM_DOMAINS || '')
+      .split(',')
+      .map((value) => normalizeHost(value))
+      .filter(Boolean),
     /** Dev-only host→DSA code map; always empty in production. */
     publicDevHostMap,
+    /** When true, X-Forwarded-Host may identify the public site. Off by default. */
+    trustProxy: String(process.env.TRUST_PROXY || '') === '1',
     /** Default HTTP timeout for real supplier calls (Phase 11A). */
     supplierHttpTimeoutMs: asNumber(process.env.SUPPLIER_HTTP_TIMEOUT_MS, 15_000),
     supplierSearchConcurrency: asNumber(process.env.SUPPLIER_SEARCH_CONCURRENCY, 4),
+    /**
+     * Common Supplier Gateway. Off until validated so current search and booking stay unchanged.
+     * GATEWAY_INTERNAL_TOKEN and GATEWAY_CREDENTIAL_KEY are never logged or returned.
+     */
+    commonSupplierGateway: {
+      enabled: String(process.env.COMMON_SUPPLIER_GATEWAY_ENABLED || '') === '1',
+      internalToken: process.env.GATEWAY_INTERNAL_TOKEN || '',
+      port: asNumber(process.env.GATEWAY_PORT, 3010),
+    },
     /**
      * Legacy per-code env placeholders (Phase 11 TEST). Prefer
      * SUPPLIER_{CODE}_{ENV}_* via credential-resolver.

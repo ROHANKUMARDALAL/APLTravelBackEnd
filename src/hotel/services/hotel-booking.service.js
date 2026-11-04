@@ -45,6 +45,15 @@ async function checkoutHotel(dto, context = {}) {
   if (!room) {
     throw AppError.validation('selectedRoom missing — pass aplRoomId');
   }
+  if (process.env.COMMON_SUPPLIER_GATEWAY_ENABLED === '1' && context.tenant?.dsaId) {
+    const { assertOfferOwnership } = require('../../common-supplier-gateway/offers');
+    await assertOfferOwnership({
+      dsaId: context.tenant.dsaId,
+      searchId: dto.searchId,
+      fareId: room.aplRoomId,
+      supplierCode: room.supplier,
+    });
+  }
 
   const pricingContext = await createPricingContext({
     dsaId: context.tenant?.dsaId || null,

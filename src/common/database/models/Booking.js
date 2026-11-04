@@ -100,6 +100,9 @@ const BookingSchema = new mongoose.Schema(
     commercialSnapshot: { type: mongoose.Schema.Types.Mixed },
     /** Local confirmation number claimed onto this customer, so a reload does not duplicate it. */
     clientReference: { type: String, sparse: true, unique: true },
+    /** Confirmation reference. Separate from aplBookingRef and supplierBookingRef. */
+    pnr: { type: String },
+    confirmationNotice: { type: String },
     /** UTC instant used only to order bookings, newest first. */
     bookedAtUtc: { type: Date, index: true },
     /** IANA zone chosen from the booking currency. */
@@ -117,6 +120,10 @@ const BookingSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+BookingSchema.index(
+  { pnr: 1 },
+  { unique: true, partialFilterExpression: { pnr: { $type: 'string' } } },
+);
 BookingSchema.index({ productType: 1, createdAt: -1 });
 BookingSchema.index({ createdAt: -1 });
 BookingSchema.index({ dsaId: 1, createdAt: -1 });

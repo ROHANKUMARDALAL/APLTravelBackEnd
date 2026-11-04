@@ -40,6 +40,7 @@
   },
   "dependencies": {
     "@apl/shared-domain": "file:packages/shared-domain",
+    "@apltravel/supplier-connectors": "file:../../APLCommonCDNAPI",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",

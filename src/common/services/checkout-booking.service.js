@@ -98,6 +98,8 @@ async function createCheckoutSession({
 async function loadConfirmedBookingResponse(booking, paymentDoc, user, offerSnapshot) {
   return {
     aplBookingRef: booking.aplBookingRef,
+    pnr: booking.pnr || null,
+    confirmationNotice: booking.confirmationNotice || null,
     bookingStatus: booking.status,
     paymentStatus: normalizePaymentStatus(paymentDoc?.status),
     status: booking.status,
@@ -401,6 +403,7 @@ async function confirmBookingFromCheckout({
   const aplBookingRef = formatAplBookingRef(
     crypto.randomBytes(4).toString('hex').toUpperCase(),
   );
+  let supplierIsMock = true;
   let supplierCode = claimed.offerSnapshot?.supplier || 'TBO';
   let supplierBookingRef = claimed.productType === 'FLIGHT'
     ? null
@@ -537,6 +540,7 @@ async function confirmBookingFromCheckout({
         );
       }
       supplierBookingRef = booked.pnr;
+      supplierIsMock = booked.testBooking !== false;
       if (claimed.offerSnapshot?.returnJourney) {
         const returnBooked = await adapter.bookFlight(claimed.offerSnapshot.returnJourney, {});
         if (!returnBooked || returnBooked.status !== 'SUCCESS' || !returnBooked.pnr) {
@@ -718,7 +722,18 @@ async function confirmBookingFromCheckout({
     const method = ['WALLET', 'UPI', 'CARD', 'NET_BANKING'].includes(String(charge.paymentMethod || '').toUpperCase())
       ? String(charge.paymentMethod).toUpperCase()
       : 'OTHER';
+    const { assignConfirmationPnr } = require('./booking-pnr');
+    const confirmation = {
+      productType: claimed.productType,
+      status: 'CONFIRMED',
+    };
+    await assignConfirmationPnr(Booking, confirmation, {
+      mock: supplierIsMock,
+      supplierReference: supplierBookingRef,
+    });
     booking = await Booking.create({
+      pnr: confirmation.pnr,
+      confirmationNotice: confirmation.confirmationNotice,
       aplBookingRef,
       userId: user._id,
       customerProfileId: String(user._id),
@@ -862,6 +877,7 @@ async function confirmBookingFromCheckout({
     status: 'SUCCESS',
     result: {
       aplBookingRef,
+      pnr: booking.pnr || null,
       paymentRef: paymentDoc.paymentRef,
       supplierBookingRef,
     },
@@ -1156,6 +1172,9 @@ function bookingCard(booking, payment, searchRequest) {
 
   return {
     bookingId: booking.aplBookingRef,
+    pnr: booking.pnr || null,
+    confirmationNotice: booking.confirmationNotice || null,
+    supplierBookingRef: item?.supplierBookingRef || null,
     customerId: booking.customerProfileId || (booking.userId ? String(booking.userId) : null),
     productType: booking.productType,
     service,
@@ -1229,11 +1248,26 @@ async function listBookingsForCustomer(user, options = {}) {
       { $set: { userId: user._id, customerProfileId: customerId } },
     );
   }
+  const { referenceFilter } = require('./booking-pnr');
   const filter = { userId: user._id };
   if (options.tenant?.dsaId) filter.dsaId = options.tenant.dsaId;
+  const serviceNames = { flight: 'FLIGHT', hotel: 'HOTEL', bus: 'BUS', transfer: 'TRANSFER', cab: 'TRANSFER', recharge: 'RECHARGE' };
+  const service = serviceNames[String(options.service || '').toLowerCase()] || String(options.service || '').toUpperCase();
+  if (['FLIGHT', 'HOTEL', 'BUS', 'TRANSFER', 'RECHARGE'].includes(service)) filter.productType = service;
+  if (options.q) {
+    const match = referenceFilter(options.q);
+    if (!match) {
+      return { customerId, count: 0, bookings: [], services: {}, page: 1, pageSize: 20, total: 0 };
+    }
+    filter.$or = match.$or;
+  }
+  const page = Math.max(1, Number(options.page) || 1);
+  const pageSize = Math.min(20, Math.max(1, Number(options.pageSize) || 20));
+  const total = await Booking.countDocuments(filter);
   const bookings = await Booking.find(filter)
     .sort({ createdAt: -1 })
-    .limit(100);
+    .skip((page - 1) * pageSize)
+    .limit(pageSize);
   const payments = await latestPaymentsFor(bookings);
   const searchIds = [...new Set(bookings.map((booking) => booking.searchId).filter(Boolean))];
   const searches = searchIds.length
@@ -1252,6 +1286,9 @@ async function listBookingsForCustomer(user, options = {}) {
   return {
     customerId,
     count: cards.length,
+    total,
+    page,
+    pageSize,
     bookings: cards,
     services,
   };
@@ -1359,8 +1396,13 @@ async function claimRecordedBooking(user, body) {
     clientReference,
   };
 
+  const { assignConfirmationPnr } = require('./booking-pnr');
+  const confirmation = { productType: storedType, status: 'CONFIRMED' };
+  await assignConfirmationPnr(Booking, confirmation, { mock: true, supplierReference: clientReference });
   const booking = await Booking.create({
     aplBookingRef,
+    pnr: confirmation.pnr,
+    confirmationNotice: confirmation.confirmationNotice,
     userId: user._id,
     customerProfileId: String(user._id),
     productType: storedType,

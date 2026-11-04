@@ -44,6 +44,28 @@ const SupplierSchema = new mongoose.Schema(
      */
     credentialRef: { type: String, default: '', maxlength: 120 },
     credentialsConfigured: { type: Boolean, default: false },
+    capabilities: {
+      type: [String],
+      enum: ['SEARCH', 'PRICE', 'BOOK', 'CANCEL', 'REFUND', 'RETRIEVE'],
+      default: undefined,
+    },
+    integrationStatus: {
+      type: String,
+      enum: [
+        'MOCK',
+        'PLACEHOLDER',
+        'DEVELOPMENT',
+        'SANDBOX_READY',
+        'TESTED',
+        'LIVE_READY',
+        'READY',
+        'DISABLED',
+      ],
+      default: 'MOCK',
+    },
+    adapterVersion: { type: String, default: '0.0.0', maxlength: 40 },
+    /** Host allowlist for real supplier calls. Empty means mocks only. */
+    allowedHosts: { type: [String], default: undefined },
     metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true },

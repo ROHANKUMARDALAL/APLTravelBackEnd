@@ -37,6 +37,22 @@ const TaxSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const DOMAIN_MAPPING_STATUSES = ['PENDING', 'VERIFIED', 'SSL_PENDING', 'ACTIVE', 'FAILED', 'DISABLED'];
+
+const DomainMappingSchema = new mongoose.Schema(
+  {
+    host: { type: String, required: true, trim: true, lowercase: true, maxlength: 253 },
+    kind: { type: String, enum: ['PLATFORM', 'CUSTOM'], default: 'CUSTOM' },
+    status: { type: String, enum: DOMAIN_MAPPING_STATUSES, default: 'PENDING' },
+    enabled: { type: Boolean, default: true },
+    primary: { type: Boolean, default: false },
+    verificationName: { type: String, default: '' },
+    verificationValue: { type: String, default: '' },
+    updatedAt: { type: Date },
+  },
+  { _id: false },
+);
+
 const WebsiteAccessSchema = new mongoose.Schema(
   {
     tokenHash: { type: String, default: '' },
@@ -88,6 +104,7 @@ const DsaSchema = new mongoose.Schema(
     domain: { type: String, trim: true, lowercase: true, default: '', maxlength: 253 },
     subdomain: { type: String, trim: true, lowercase: true, default: '', maxlength: 63 },
     customDomains: { type: [String], default: undefined },
+    domainMappings: { type: [DomainMappingSchema], default: undefined },
     websiteAccess: { type: WebsiteAccessSchema, default: undefined },
     status: {
       type: String,
@@ -123,3 +140,4 @@ DsaSchema.index(
 module.exports = mongoose.models.Dsa || mongoose.model('Dsa', DsaSchema);
 module.exports.DSA_STATUSES = DSA_STATUSES;
 module.exports.DsaSchema = DsaSchema;
+module.exports.DOMAIN_MAPPING_STATUSES = DOMAIN_MAPPING_STATUSES;

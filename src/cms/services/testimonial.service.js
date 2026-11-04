@@ -14,7 +14,10 @@ function toPublic(doc) {
     customerName: o.customerName,
     designation: o.designation || '',
     company: o.company || '',
+    title: o.title || '',
     message: o.message,
+    relatedService: o.relatedService || '',
+    source: o.source || 'ADMIN',
     rating: o.rating,
     imageUrl: o.imageUrl || '',
     status: o.status,
@@ -25,7 +28,7 @@ function toPublic(doc) {
 }
 
 async function listTestimonials(dsaId, { status } = {}) {
-  const filter = { dsaId };
+  const filter = { dsaId, deletedAt: null };
   if (status) {
     const s = String(status).toUpperCase();
     if (!TESTIMONIAL_STATUSES.includes(s)) {
@@ -41,7 +44,7 @@ async function listTestimonials(dsaId, { status } = {}) {
 
 async function getForTenant(dsaId, id) {
   if (!Types.ObjectId.isValid(id)) throw AppError.validation('Invalid id');
-  const doc = await Testimonial.findOne({ _id: id, dsaId });
+  const doc = await Testimonial.findOne({ _id: id, dsaId, deletedAt: null });
   if (!doc) throw AppError.notFound('Testimonial not found');
   return doc;
 }
@@ -112,6 +115,76 @@ async function updateTestimonial(dsaId, id, input = {}) {
   return toPublic(doc);
 }
 
+const SERVICES = ['flight', 'hotel', 'bus', 'transfer', 'recharge', 'insurance', 'holiday', 'visa', 'general', ''];
+
+function plainReview(value, max) {
+  return sanitizeRichText(value).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function reviewInput(input) {
+  const message = plainReview(input.message, 2000);
+  if (message.length < 10) throw AppError.validation('Write at least 10 characters');
+  const rating = Number(input.rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw AppError.validation('Choose a rating from 1 to 5');
+  const relatedService = String(input.relatedService || '').toLowerCase();
+  if (!SERVICES.includes(relatedService)) throw AppError.validation('Choose a related service');
+  return { message, rating, relatedService, title: plainReview(input.title, 160) };
+}
+
+async function createCustomerReview({ dsaId, user, input }) {
+  if (!dsaId) throw AppError.forbidden('This website is not available');
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const recent = await Testimonial.countDocuments({ dsaId, customerId: user._id, source: 'CUSTOMER', deletedAt: null, createdAt: { $gte: since } });
+  if (recent >= 2) throw AppError.validation('Please wait before submitting another review');
+  const fields = reviewInput(input);
+  const duplicate = await Testimonial.findOne({ dsaId, customerId: user._id, source: 'CUSTOMER', deletedAt: null, message: fields.message });
+  if (duplicate) throw AppError.validation('You already submitted this review');
+  const doc = await Testimonial.create({
+    dsaId,
+    customerId: user._id,
+    customerName: user.name,
+    title: fields.title,
+    message: fields.message,
+    rating: fields.rating,
+    imageUrl: user.profilePhoto || '',
+    relatedService: fields.relatedService,
+    source: 'CUSTOMER',
+    status: 'ACTIVE',
+    displayOrder: 50,
+  });
+  return toPublic(doc);
+}
+
+async function updateCustomerReview({ dsaId, user, reviewId, input }) {
+  if (!dsaId) throw AppError.forbidden('This website is not available');
+  if (!Types.ObjectId.isValid(reviewId)) throw AppError.notFound('Review not found');
+  const doc = await Testimonial.findOne({ _id: reviewId, dsaId, customerId: user._id, source: 'CUSTOMER', deletedAt: null });
+  if (!doc) throw AppError.notFound('Review not found');
+  const fields = reviewInput(input);
+  doc.title = fields.title;
+  doc.message = fields.message;
+  doc.rating = fields.rating;
+  doc.relatedService = fields.relatedService;
+  await doc.save();
+  return toPublic(doc);
+}
+
+async function deleteCustomerReview({ dsaId, user, reviewId }) {
+  if (!dsaId) throw AppError.forbidden('This website is not available');
+  if (!Types.ObjectId.isValid(reviewId)) throw AppError.notFound('Review not found');
+  const doc = await Testimonial.findOne({ _id: reviewId, dsaId, customerId: user._id, source: 'CUSTOMER', deletedAt: null });
+  if (!doc) throw AppError.notFound('Review not found');
+  doc.deletedAt = new Date();
+  doc.status = 'INACTIVE';
+  await doc.save();
+  return { deleted: true, id: String(doc._id) };
+}
+
+async function listCustomerReviews(dsaId, userId) {
+  const rows = await Testimonial.find({ dsaId, customerId: userId, source: 'CUSTOMER', deletedAt: null }).sort({ createdAt: -1 }).limit(20).lean();
+  return rows.map(toPublic);
+}
+
 async function deleteTestimonial(dsaId, id) {
   const doc = await getForTenant(dsaId, id);
   await Testimonial.deleteOne({ _id: doc._id, dsaId });
@@ -123,5 +196,9 @@ module.exports = {
   createTestimonial,
   updateTestimonial,
   deleteTestimonial,
+  createCustomerReview,
+  updateCustomerReview,
+  deleteCustomerReview,
+  listCustomerReviews,
   toPublic,
 };

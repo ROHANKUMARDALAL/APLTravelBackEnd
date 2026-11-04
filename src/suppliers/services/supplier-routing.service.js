@@ -109,8 +109,13 @@ async function buildSupplierExecutionPlan({
       : ['TEST'];
     if (!allowedEnvs.includes(env)) continue;
 
-    const adapter = adapterByCode.get(String(supplier.code).toUpperCase());
-    // Phase 10: mock adapters only. Missing adapter → skip (not crash).
+    let adapter = adapterByCode.get(String(supplier.code).toUpperCase());
+    if (require('../../common/config').config.commonSupplierGateway.enabled) {
+      const decision = require('../../common-supplier-gateway/connector-bridge').connectorForSupplier(supplier);
+      if (decision.blocked) continue;
+      if (decision.useConnector) adapter = decision.adapter;
+    }
+    // Existing mock adapters remain in use unless a connector status is explicitly callable.
     if (!adapter) continue;
 
     const credentialRef =
@@ -137,6 +142,14 @@ async function buildSupplierExecutionPlan({
       credentialMeta: credentialMetaPublic(resolved),
       adapter,
       assignmentId: String(row._id),
+      dsaId: String(dsaId),
+      ownershipMode: row.ownershipMode || 'APL',
+      credentialOwner: row.credentialOwner || 'APL',
+      credentialConfigId: row.credentialConfigId ? String(row.credentialConfigId) : '',
+      rateLimitPerMinute: row.rateLimitPerMinute || 60,
+      capabilities: row.capabilities || [],
+      allowedHosts: supplier.allowedHosts || [],
+      integrationStatus: supplier.integrationStatus || (supplier.isMock ? 'MOCK' : 'READY'),
     });
   }
 

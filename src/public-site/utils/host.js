@@ -81,9 +81,26 @@ function parseDevHostMap(raw) {
 }
 
 /**
- * Development label for `{subdomain}.localhost[:port]`.
- * Bare localhost is not a tenant subdomain.
+ * Choose the hostname that identifies a tenant.
+ * x-apl-public-host is a development bridge from the B2C app.
+ * x-forwarded-host is used only when the process is configured to trust a proxy.
  */
+function selectInboundHost({
+  hostHeader = '',
+  forwardedHost = '',
+  aplPublicHost = '',
+  trustProxy = false,
+  isProduction = false,
+} = {}) {
+  const aplPublic = normalizeHost(aplPublicHost);
+  if (!isProduction && aplPublic) return aplPublic;
+  if (trustProxy) {
+    const forwarded = normalizeHost(String(forwardedHost || '').split(',')[0]);
+    if (forwarded) return forwarded;
+  }
+  return normalizeHost(hostHeader);
+}
+
 function developmentSubdomain(host) {
   const normalized = normalizeHost(host);
   const hostname = normalized.includes(':') ? normalized.split(':')[0] : normalized;
@@ -98,4 +115,5 @@ module.exports = {
   parseDevHostMap,
   isLocalHost,
   developmentSubdomain,
+  selectInboundHost,
 };

@@ -38,6 +38,32 @@ const DsaSupplierSchema = new mongoose.Schema(
       enum: ['PARALLEL', 'PRIORITY', 'FALLBACK'],
       default: 'PARALLEL',
     },
+    /**
+     * Common Supplier Gateway (additive).
+     * APL uses APL-managed credentials, CLIENT uses this DSA's own secret,
+     * HYBRID allows a mix across assignments for the same DSA.
+     */
+    ownershipMode: {
+      type: String,
+      enum: ['APL', 'CLIENT', 'HYBRID'],
+      default: 'APL',
+    },
+    credentialOwner: {
+      type: String,
+      enum: ['APL', 'CLIENT'],
+      default: 'APL',
+    },
+    credentialConfigId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    environment: {
+      type: String,
+      enum: ['TEST', 'LIVE', null],
+      default: null,
+    },
+    capabilities: { type: [String], default: undefined },
+    rateLimitPerMinute: { type: Number, min: 1, max: 600, default: 60 },
     notes: { type: String, default: '', maxlength: 500 },
   },
   { timestamps: true },

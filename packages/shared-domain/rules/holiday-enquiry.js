@@ -200,9 +200,115 @@ function validateHolidayEnquiry(body, { isInternational } = {}) {
   };
 }
 
+const VISA_TYPES = ['TOURIST', 'BUSINESS', 'STUDENT', 'WORK', 'TRANSIT', 'MEDICAL', 'FAMILY_VISIT'];
+
+function addIsoDays(iso, days) {
+  const [year, month, day] = iso.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function validateVisaEnquiry(source) {
+  const errors = [];
+  const visaType = clean(source.visaType, 40).toUpperCase().replace(/\s+/g, '_');
+  const destinationIso = clean(source.destinationIso || source.destinationCountryCode, 2).toUpperCase();
+  const destinationCountry = clean(source.destinationCountry, 80);
+  const departure = clean(source.preferredDepartureDate, 10);
+  const durationDays = Number(source.durationDays);
+  const travellers = Array.isArray(source.travellers) ? source.travellers : [];
+  const count = Number(source.travellerCount);
+  if (!VISA_TYPES.includes(visaType)) errors.push({ field: 'visaType', message: 'Choose a visa type' });
+  if (!/^[A-Z]{2}$/.test(destinationIso) || !destinationCountry) {
+    errors.push({ field: 'destinationCountry', message: 'Choose a destination country' });
+  }
+  if (!isIsoDate(departure) || departure < todayIso()) {
+    errors.push({ field: 'preferredDepartureDate', message: 'Choose a departure date today or later' });
+  }
+  if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 365) {
+    errors.push({ field: 'durationDays', message: 'Enter a stay of 1 to 365 days' });
+  }
+  if (!Number.isInteger(count) || count < 1 || count > 10 || count !== travellers.length) {
+    errors.push({ field: 'travellerCount', message: 'Traveller count must match the traveller list' });
+  }
+  const returnDate = isIsoDate(departure) && Number.isInteger(durationDays) ? addIsoDays(departure, durationDays) : '';
+  const passengers = travellers.slice(0, 10).map((row, index) => {
+    const prefix = `travellers.${index}`;
+    const title = clean(row?.title, 20);
+    const firstName = clean(row?.firstName, 80);
+    const lastName = clean(row?.lastName, 80);
+    const dateOfBirth = clean(row?.dateOfBirth, 10);
+    const gender = clean(row?.gender, 20).toUpperCase();
+    const nationality = clean(row?.nationality, 80);
+    const nationalityIso = clean(row?.nationalityIso, 2).toUpperCase();
+    const email = clean(row?.email, 254).toLowerCase();
+    const phone = clean(row?.phone, 20).replace(/[^\d+]/g, '');
+    const passportNumber = clean(row?.passportNumber, 20).toUpperCase();
+    const passportExpiry = clean(row?.passportExpiry, 10);
+    if (!firstName) errors.push({ field: `${prefix}.firstName`, message: 'Enter a first name' });
+    if (!lastName) errors.push({ field: `${prefix}.lastName`, message: 'Enter a last name' });
+    if (!isIsoDate(dateOfBirth) || dateOfBirth > todayIso() || dateOfBirth < '1900-01-01') {
+      errors.push({ field: `${prefix}.dateOfBirth`, message: 'Enter a valid date of birth' });
+    }
+    if (!['MALE', 'FEMALE', 'OTHER'].includes(gender)) errors.push({ field: `${prefix}.gender`, message: 'Choose a gender' });
+    if (!nationality || !/^[A-Z]{2}$/.test(nationalityIso)) errors.push({ field: `${prefix}.nationality`, message: 'Choose a nationality' });
+    if (!/^\+?[0-9]{8,15}$/.test(phone)) errors.push({ field: `${prefix}.phone`, message: 'Enter a valid phone number' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push({ field: `${prefix}.email`, message: 'Enter a valid email' });
+    if (!/^[A-Z0-9]{6,12}$/.test(passportNumber)) errors.push({ field: `${prefix}.passportNumber`, message: 'Enter a passport number' });
+    if (!isIsoDate(passportExpiry) || (returnDate && passportExpiry <= returnDate)) {
+      errors.push({ field: `${prefix}.passportExpiry`, message: 'Passport expiry must be after the intended stay' });
+    }
+    return {
+      fullName: `${firstName} ${lastName}`.trim(),
+      title,
+      firstName,
+      lastName,
+      dateOfBirth,
+      age: ageOnIsoDate(dateOfBirth, departure || todayIso()),
+      gender,
+      nationality,
+      phone,
+      email,
+      document: {
+        type: 'PASSPORT',
+        number: passportNumber,
+        holderName: `${firstName} ${lastName}`.trim(),
+        nationality: nationalityIso,
+        dateOfBirth,
+        expiryDate: passportExpiry,
+        issuingCountry: nationalityIso,
+      },
+    };
+  });
+  const lead = passengers[0] || {};
+  return {
+    ok: errors.length === 0,
+    errors,
+    value: {
+      preferredDepartureDate: departure,
+      durationDays: Number.isInteger(durationDays) ? durationDays : 0,
+      adults: passengers.length,
+      children: 0,
+      totalPassengers: passengers.length,
+      passengers,
+      visaDetails: {
+        visaType,
+        destinationCountry,
+        destinationIso,
+        estimatedReturnDate: returnDate,
+      },
+      contactDetails: { name: lead.fullName || '', mobile: lead.phone || '', email: lead.email || '' },
+      specialRequirements: clean(source.specialRequirements, 2000),
+      idempotencyKey: clean(source.idempotencyKey, 80),
+    },
+  };
+}
+
 function validateServiceEnquiry(body) {
   const errors = [];
   const source = body && typeof body === 'object' ? body : {};
+  const service = clean(source.serviceCode, 40).toLowerCase();
+  if (service === 'visa') return validateVisaEnquiry(source);
   const contact = source.contactDetails || {};
   const mobile = clean(contact.mobile, 20);
   const email = clean(contact.email, 254).toLowerCase();
@@ -215,7 +321,6 @@ function validateServiceEnquiry(body) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     errors.push({ field: 'contactDetails.email', message: 'Enter a contact email' });
   }
-  const service = clean(source.serviceCode, 40).toLowerCase();
   const contactName = clean(contact.name || source.contactName, 120);
   let adults = 0;
   let specialRequirements = clean(source.specialRequirements, 2000);
