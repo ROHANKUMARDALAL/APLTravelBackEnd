@@ -18,6 +18,11 @@ function clean(value, max = 200) {
 function encryptPassengers(passengers) {
   return (passengers || []).map((row) => ({
     fullName: row.fullName,
+    title: row.title || '',
+    firstName: row.firstName || '',
+    lastName: row.lastName || '',
+    phone: row.phone || '',
+    email: row.email || '',
     dateOfBirth: row.dateOfBirth || '',
     age: row.age,
     gender: row.gender || '',
@@ -75,6 +80,11 @@ function presentPassenger(passenger, { reveal }) {
   }
   return {
     fullName: passenger.fullName,
+    title: passenger.title || '',
+    firstName: passenger.firstName || '',
+    lastName: passenger.lastName || '',
+    phone: passenger.phone || '',
+    email: passenger.email || '',
     dateOfBirth: passenger.dateOfBirth || '',
     age: passenger.age,
     gender: passenger.gender || '',
@@ -89,6 +99,9 @@ function presentEnquiry(doc, { reveal = false, includeInternal = false } = {}) {
     id: String(row._id),
     enquiryReference: row.enquiryReference,
     dsaId: String(row.dsaId),
+    dsaCode: row.dsaCode || '',
+    dsaName: row.dsaName || '',
+    visaDetails: row.visaDetails || null,
     serviceCode: row.serviceCode,
     enquiryCategory: row.enquiryCategory === 'GROUP_DEPARTURE' ? 'GROUP_DEPARTURE' : (row.enquiryCategory || ''),
     customerId: String(row.customerId),
@@ -129,6 +142,7 @@ async function submitEnquiry({
   customer,
   membership,
   packageDoc,
+  dsaSnapshot,
   body,
 }) {
   const code = clean(serviceCode, 40).toLowerCase();
@@ -167,6 +181,8 @@ async function submitEnquiry({
     const created = await Enquiry.create({
       enquiryReference: reference,
       dsaId,
+      dsaCode: clean(dsaSnapshot?.dsaCode, 40),
+      dsaName: clean(dsaSnapshot?.dsaName, 160),
       serviceCode: code,
       customerId: customer.id,
       customerMembershipId: membership.id,
@@ -247,6 +263,8 @@ function buildAdminFilter({ dsaId, query = {} }) {
     'contactDetails.mobile',
     'holidayPackageSnapshot.title',
     'holidayPackageSnapshot.destinationCity',
+    'visaDetails.visaType',
+    'visaDetails.destinationCountry',
   ]);
   addText(query.customer, [
     'customerSnapshot.name',

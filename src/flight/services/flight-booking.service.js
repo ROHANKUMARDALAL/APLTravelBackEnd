@@ -173,6 +173,15 @@ async function checkoutFlight(dto, context = {}) {
   if (!fare) {
     throw AppError.validation('selectedFlightFareData missing — pass aplFareId');
   }
+  if (process.env.COMMON_SUPPLIER_GATEWAY_ENABLED === '1' && context.tenant?.dsaId) {
+    const { assertOfferOwnership } = require('../../common-supplier-gateway/offers');
+    await assertOfferOwnership({
+      dsaId: context.tenant.dsaId,
+      searchId: dto.searchId,
+      fareId: fare.aplFareId,
+      supplierCode: fare.supplier,
+    });
+  }
 
   // Recalculate commercial layer from preserved supplier price (authoritative).
   // Route comes from the stored search, and the customer comes from the session.

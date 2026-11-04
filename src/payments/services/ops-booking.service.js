@@ -59,6 +59,8 @@ function serializeBookingListItem(booking, payment, audience) {
     currency: booking.currency,
     guestEmail: booking.guestEmail,
     guestPhone: booking.guestPhone,
+    pnr: booking.pnr || null,
+    confirmationNotice: booking.confirmationNotice || null,
     dsaId: booking.dsaId ? String(booking.dsaId) : null,
     requestId: booking.requestId || null,
     supplierCode: item?.supplierCode || null,
@@ -239,6 +241,8 @@ async function getBookingDetail({
     totalAmount: booking.totalAmount,
     guestEmail: booking.guestEmail,
     guestPhone: booking.guestPhone,
+    pnr: booking.pnr || null,
+    confirmationNotice: booking.confirmationNotice || null,
     userId: booking.userId ? String(booking.userId) : null,
     dsaId: booking.dsaId ? String(booking.dsaId) : null,
     dsa: dsa

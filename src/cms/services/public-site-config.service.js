@@ -93,7 +93,7 @@ async function buildPublicSiteConfig(dsa) {
           'title slug shortDescription featuredImageUrl images publishDate seoTitle seoDescription',
         )
         .lean(),
-      Testimonial.find({ dsaId, status: 'ACTIVE' })
+      Testimonial.find({ dsaId, status: 'ACTIVE', deletedAt: null })
         .sort({ displayOrder: 1 })
         .lean(),
       FooterLink.find({ dsaId, status: 'ACTIVE' })

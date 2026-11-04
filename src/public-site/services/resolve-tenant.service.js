@@ -9,6 +9,7 @@ const {
   parseDevHostMap,
   isLocalHost,
   developmentSubdomain,
+  selectInboundHost,
 } = require('../utils/host');
 
 /** Local hosts often include :port; stored Dsa.domain may omit it. */
@@ -25,20 +26,18 @@ function domainLookupCandidates(host) {
  * Resolve the public DSA tenant from the inbound website host.
  * Never trusts client-supplied dsaId.
  */
-function extractRequestHost(req) {
-  // Prefer proxy-forwarded host (B2C server / CDN), then Host.
-  const forwarded = String(req.headers['x-forwarded-host'] || '')
-    .split(',')[0]
-    .trim();
-  const aplPublic = String(req.headers['x-apl-public-host'] || '').trim();
-  const hostHeader = String(req.headers.host || '').trim();
+function mappingRoutable(mapping) {
+  return Boolean(mapping) && mapping.enabled !== false && mapping.status === 'ACTIVE';
+}
 
-  // Dev-only explicit host from B2C when calling local API as localhost:3000.
-  if (!config.isProduction && aplPublic) {
-    return normalizeHost(aplPublic);
-  }
-  if (forwarded) return normalizeHost(forwarded);
-  return normalizeHost(hostHeader);
+function extractRequestHost(req) {
+  return selectInboundHost({
+    hostHeader: req.headers.host,
+    forwardedHost: req.headers['x-forwarded-host'],
+    aplPublicHost: req.headers['x-apl-public-host'],
+    trustProxy: config.trustProxy,
+    isProduction: config.isProduction,
+  });
 }
 
 function assertDatabaseReady() {
@@ -65,10 +64,15 @@ function subdomainFromHost(host) {
   if (hostNoPort === 'localhost' || hostNoPort === '127.0.0.1' || hostNoPort === '::1') {
     return '';
   }
-  const base = config.publicTenantBaseDomain;
-  if (base && hostNoPort.endsWith(`.${base}`)) {
-    const sub = hostNoPort.slice(0, -(base.length + 1));
-    if (sub && !sub.includes('.')) return sub;
+  const bases = [
+    config.publicTenantBaseDomain,
+    ...(Array.isArray(config.allowedPlatformDomains) ? config.allowedPlatformDomains : []),
+  ].filter(Boolean);
+  for (const base of bases) {
+    if (hostNoPort.endsWith(`.${base}`)) {
+      const sub = hostNoPort.slice(0, -(base.length + 1));
+      if (sub && !sub.includes('.')) return sub;
+    }
   }
   if (!hostNoPort.includes('.')) return hostNoPort;
   return '';
@@ -76,15 +80,20 @@ function subdomainFromHost(host) {
 
 async function findDsaForHost(host) {
   assertDatabaseReady();
+  host = normalizeHost(host);
+  if (!host) return null;
   for (const candidate of domainLookupCandidates(host)) {
     const byDomain = await Dsa.findOne({
       $or: [{ domain: candidate }, { customDomains: candidate }],
     }).lean();
     if (byDomain) {
-      return {
-        dsa: byDomain,
-        source: byDomain.domain === candidate ? 'domain' : 'custom_domain',
-      };
+      const mapping = (byDomain.domainMappings || []).find((row) => normalizeHost(row.host) === candidate);
+      if (mappingRoutable(mapping)) {
+        return {
+          dsa: byDomain,
+          source: mapping.primary ? 'primary_domain' : 'custom_domain',
+        };
+      }
     }
   }
   const sub = subdomainFromHost(host);
@@ -141,4 +150,6 @@ module.exports = {
     return dsa;
   },
   parseDevHostMap,
+  mappingRoutable,
+  findDsaForHost,
 };

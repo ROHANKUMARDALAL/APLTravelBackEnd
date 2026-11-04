@@ -20,6 +20,11 @@ const PassengerDocumentSchema = new mongoose.Schema(
 const PassengerSchema = new mongoose.Schema(
   {
     fullName: { type: String, required: true, trim: true, maxlength: 160 },
+    title: { type: String, trim: true, default: '', maxlength: 20 },
+    firstName: { type: String, trim: true, default: '', maxlength: 80 },
+    lastName: { type: String, trim: true, default: '', maxlength: 80 },
+    phone: { type: String, trim: true, default: '', maxlength: 24 },
+    email: { type: String, trim: true, default: '', maxlength: 254 },
     dateOfBirth: { type: String, trim: true, default: '' },
     age: { type: Number, min: 0, max: 120 },
     gender: { type: String, trim: true, default: '' },
@@ -59,6 +64,14 @@ const EnquirySchema = new mongoose.Schema(
     },
     holidayPackageId: { type: mongoose.Schema.Types.ObjectId, ref: 'HolidayPackage' },
     holidayPackageSnapshot: { type: mongoose.Schema.Types.Mixed, default: null },
+    dsaCode: { type: String, default: '', maxlength: 40 },
+    dsaName: { type: String, default: '', maxlength: 160 },
+    visaDetails: {
+      visaType: { type: String, default: '', maxlength: 40 },
+      destinationCountry: { type: String, default: '', maxlength: 80 },
+      destinationIso: { type: String, default: '', maxlength: 2 },
+      estimatedReturnDate: { type: String, default: '', maxlength: 10 },
+    },
     preferredDepartureDate: { type: String, default: '' },
     durationDays: { type: Number, default: 0 },
     adults: { type: Number, default: 0 },

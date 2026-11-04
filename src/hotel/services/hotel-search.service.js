@@ -244,6 +244,18 @@ async function searchHotels(dto, forcedFailureList, context = {}) {
     isUsable: (outcome) => outcome?.status === 'SUCCESS' && (outcome.hotels || []).length > 0,
     invoke: async (entry) => {
       try {
+        if (config.commonSupplierGateway.enabled && String(entry.credentialOwner || 'APL').toUpperCase() === 'CLIENT') {
+          const resolved = await require('../../common-supplier-gateway/credentials').resolveAssignmentCredentials(entry);
+          if (!resolved.configured) {
+            return {
+              status: 'FAILED',
+              durationMs: 0,
+              errorCode: resolved.reason || 'CLIENT_CREDENTIAL_MISSING',
+              errorMessage: 'Client supplier credentials are not configured',
+              hotels: [],
+            };
+          }
+        }
         return await entry.adapter.searchHotels(criteria, {
           simulateFailure: forcedFailures.has(entry.adapter.code),
           ...adapterContext,
@@ -299,9 +311,16 @@ async function searchHotels(dto, forcedFailureList, context = {}) {
     dsaId: context.dsaId || null,
     serviceCode: 'hotel',
   });
-  const hotels = consolidateOffers(clusters, pricingContext).sort(
+  let hotels = consolidateOffers(clusters, pricingContext).sort(
     (a, b) => a.lowestPrice.amount - b.lowestPrice.amount,
   );
+  if (config.commonSupplierGateway.enabled) {
+    hotels = await require('../../common-supplier-gateway').applyGatewayHotelPresentation({
+      dsaId: context.dsaId,
+      searchId: aplSearchId,
+      hotels,
+    });
+  }
 
   const successCount = supplierMeta.filter((s) => s.status === 'SUCCESS').length;
   const status =

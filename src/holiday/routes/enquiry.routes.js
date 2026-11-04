@@ -7,6 +7,8 @@ const { AppError } = require('../../common/errors/app-error');
 const { requireLogin } = require('../../common/middleware/require-login');
 const { requireTransactionTenant } = require('../../tenant/middleware/require-transaction-tenant');
 const { assertServiceOfferedForTenant } = require('../../tenant/services/transaction-tenant.service');
+const rateLimit = require('express-rate-limit');
+const Dsa = require('../../tenant/models/Dsa');
 const { enquiries, DomainError, canonicalServiceCode } = require('@apl/shared-domain');
 
 const router = express.Router();
@@ -38,8 +40,16 @@ router.get(
   }),
 );
 
+const enquiryLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 router.post(
   '/',
+  enquiryLimiter,
   requireTransactionTenant,
   requireLogin,
   asyncHandler(async (req, res) => {
@@ -60,9 +70,14 @@ router.post(
     delete body.dsaId;
     delete body.customerId;
     delete body.isInternational;
+    const desk = await Dsa.findById(req.tenant.dsaId).select('dsaCode displayName companyName').lean();
     try {
       const result = await enquiries.submitEnquiry({
         dsaId: req.tenant.dsaId,
+        dsaSnapshot: {
+          dsaCode: desk?.dsaCode || req.tenant.dsaCode || '',
+          dsaName: desk?.displayName || desk?.companyName || '',
+        },
         serviceCode,
         customer: {
           id: req.user._id,

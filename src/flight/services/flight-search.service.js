@@ -128,11 +128,30 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
         const credentialRef =
           entry.credentialRef ||
           `SUPPLIER_${String(entry.supplierCode || adapter.code).toUpperCase()}`;
-        const resolved = resolveSupplierCredentials({
-          credentialRef,
-          environment: entry.environment || 'TEST',
-          supplierCode: entry.supplierCode || adapter.code,
-        });
+        const resolved = config.commonSupplierGateway.enabled
+          ? await require('../../common-supplier-gateway/credentials').resolveAssignmentCredentials({
+            ...entry,
+            credentialRef,
+            isMock: entry.isMock !== false,
+          })
+          : resolveSupplierCredentials({
+            credentialRef,
+            environment: entry.environment || 'TEST',
+            supplierCode: entry.supplierCode || adapter.code,
+          });
+        if (
+          config.commonSupplierGateway.enabled
+          && String(entry.credentialOwner || '').toUpperCase() === 'CLIENT'
+          && !resolved.configured
+        ) {
+          return {
+            status: 'FAILED',
+            durationMs: Date.now() - started,
+            errorCode: resolved.reason || 'CLIENT_CREDENTIAL_MISSING',
+            errorMessage: 'Client supplier credentials are not configured',
+            flights: [],
+          };
+        }
         return await adapter.searchFlights(criteria, {
           simulateFailure: forcedFailures.has(adapter.code),
           ...adapterContext,
@@ -194,9 +213,17 @@ async function searchFlights(dto, forcedFailureList, context = {}) {
     destinationCode: criteria.destinationCityCode || null,
     customerId: context.userId || null,
   });
-  const flights = consolidateFlightOffers(clusters, pricingContext).sort(
+  let flights = consolidateFlightOffers(clusters, pricingContext).sort(
     (a, b) => a.lowestPrice.amount - b.lowestPrice.amount,
   );
+  if (config.commonSupplierGateway.enabled) {
+    const { applyGatewayFlightPresentation } = require('../../common-supplier-gateway');
+    flights = await applyGatewayFlightPresentation({
+      dsaId: context.dsaId,
+      searchId: aplSearchId,
+      flights,
+    });
+  }
 
   const successCount = supplierMeta.filter((s) => s.status === 'SUCCESS').length;
   const status =

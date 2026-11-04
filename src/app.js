@@ -103,6 +103,10 @@ function createApp(options = {}) {
   app.use(`/${config.apiPrefix}/suppliers`, suppliersRoutes);
   app.use(`/${config.apiPrefix}/hotels`, hotelsRoutes);
   app.use(`/${config.apiPrefix}/flights`, flightsRoutes);
+  if (config.commonSupplierGateway.enabled && config.commonSupplierGateway.internalToken) {
+    const { createGatewayRouter } = require('./common-supplier-gateway/routes');
+    app.use(`/${config.apiPrefix}/internal/supplier-gateway`, createGatewayRouter());
+  }
   app.use(`/${config.apiPrefix}/buses`, busesRoutes);
   app.use(`/${config.apiPrefix}/transfers`, transfersRoutes);
   app.use(`/${config.apiPrefix}/insurance`, require('./insurance/routes/insurance.routes'));
